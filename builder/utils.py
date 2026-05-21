@@ -265,10 +265,66 @@ def remove_unsafe_fields(fields):
 
 class SafeDict(dict):
 	def __getitem__(self, key):
-		return self.get(key, "")
+		val = self.get(key, None)
+		if val is None:
+			return SafeDict()
+		return val
 
 	def __getattr__(self, name):
-		return self.get(name, "")
+		val = self.get(name, None)
+		if val is None:
+			return SafeDict()
+		return val
+
+	def __str__(self):
+		if not self:
+			return ""
+		return super().__str__()
+
+	def __html__(self):
+		if not self:
+			return ""
+		return super().__html__()
+
+	def __int__(self):
+		if not self:
+			return 0
+		return int(super().__str__())
+
+	def __float__(self):
+		if not self:
+			return 0.0
+		return float(super().__str__())
+
+	def __add__(self, other):
+		if not self:
+			return other
+		return NotImplemented
+
+	def __radd__(self, other):
+		if not self:
+			return other
+		return NotImplemented
+
+	def __sub__(self, other):
+		if not self:
+			return -other
+		return NotImplemented
+
+	def __rsub__(self, other):
+		if not self:
+			return other
+		return NotImplemented
+
+	def __mul__(self, other):
+		if not self:
+			return 0
+		return NotImplemented
+
+	def __rmul__(self, other):
+		if not self:
+			return 0
+		return NotImplemented
 
 def safe_call(*args, **kwargs):
 	res = frappe.call(*args, **kwargs)
@@ -759,13 +815,22 @@ def get_export_paths(app_path, export_name):
 
 
 def to_dict_with_fallback(obj):
+	if isinstance(obj, dict):
+		return SafeDict({k: to_dict_with_fallback(v) for k, v in obj.items()})
+	elif isinstance(obj, list):
+		return [to_dict_with_fallback(v) for v in obj]
+	elif obj is None:
+		return SafeDict()
+	elif isinstance(obj, (str, int, float, bool)):
+		return obj
 	try:
+		if hasattr(obj, "as_dict"):
+			return to_dict_with_fallback(obj.as_dict())
 		return frappe._dict(obj)
-	except TypeError:
+	except (TypeError, ValueError):
 		if isinstance(obj, Document):
-			return obj.as_dict()
-		else:
-			raise
+			return to_dict_with_fallback(obj.as_dict())
+		return obj
 
 
 def combine(a, b):
