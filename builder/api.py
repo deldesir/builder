@@ -17,7 +17,7 @@ from werkzeug.wrappers import Response
 
 from builder import builder_analytics
 from builder.builder.doctype.builder_page.builder_page import BuilderPageRenderer
-from builder.utils import has_page_write
+from builder.utils import abs_url, has_page_write
 
 
 @frappe.whitelist()
@@ -131,7 +131,7 @@ def convert_to_webp(image_url: str | None = None, file_doc: Document | None = No
 		url = unquote(image_url)
 		image = Image.open(BytesIO(requests.get(url).content))
 		filename = get_external_webp_filename(url)
-		file = frappe.get_doc({"doctype": "File", "file_name": filename, "file_url": f"/files/{filename}"})
+		file = frappe.get_doc({"doctype": "File", "file_name": filename, "file_url": abs_url(f"/files/{filename}")})
 		save_as_webp(image, file.get_full_path())
 		file.save()
 		return file.file_url
@@ -168,9 +168,9 @@ def get_apps():
 	app_list = [
 		{
 			"name": "frappe",
-			"logo": "/assets/builder/images/desk.png",
+			"logo": abs_url("/assets/builder/images/desk.png"),
 			"title": "Desk",
-			"route": "/app",
+			"route": abs_url("/app"),
 		}
 	]
 	app_list += filter(lambda app: app.get("name") != "builder", apps)

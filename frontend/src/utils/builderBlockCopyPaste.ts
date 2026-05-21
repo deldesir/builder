@@ -198,7 +198,8 @@ async function handlePagePaste(
 						clipboardData.pageDoc.blocks = clipboardData.blocks.map((block) => getCopyWithoutParent(block));
 					}
 					const newPage = await webPages.insert.submit(clipboardData.pageDoc);
-					window.location.href = `/builder/page/${encodeURIComponent(newPage.name)}`;
+					const subpath = window.location.pathname.split("/builder")[0];
+					window.location.href = `${subpath}/builder/page/${encodeURIComponent(newPage.name)}`;
 					await pageStore.setPage(newPage.name);
 					toast.success("Done", { id: "paste-page" });
 				},

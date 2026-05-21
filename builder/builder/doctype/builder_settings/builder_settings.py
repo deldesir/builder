@@ -49,11 +49,13 @@ class BuilderSettings(Document):
 				self.delete_script_file(attribute, extension, folder_name)
 
 	def update_script_file(self, attribute, script_type, extension, folder_name):
+		from builder.utils import abs_url
+
 		script = self.script if script_type == "JavaScript" else self.style
 		file_name = f"builder-asset-{attribute}.{extension}"
 		file_path = self.get_file_path(file_name, folder_name)
 		self.write_to_file(file_path, script)
-		public_url = f"/files/{folder_name}/{file_name}?v={frappe.generate_hash(length=10)}"
+		public_url = abs_url(f"/files/{folder_name}/{file_name}?v={frappe.generate_hash(length=10)}")
 		self.db_set(f"{attribute}_public_url", public_url, commit=True)
 
 	def delete_script_file(self, script_type, extension, folder_name):

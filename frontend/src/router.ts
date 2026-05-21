@@ -10,10 +10,11 @@ function validatePermission(next: NavigationGuardNext) {
 		next();
 	} else {
 		alert("You do not have permission to access this page");
+		const subpath = window.location.pathname.split("/builder")[0];
 		if (isUserLoggedIn()) {
-			window.location.href = "/app";
+			window.location.href = subpath + "/app";
 		} else {
-			window.location.href = "/login?redirect-to=/builder";
+			window.location.href = subpath + "/login?redirect-to=" + subpath + "/builder";
 		}
 	}
 }
@@ -93,6 +94,11 @@ declare global {
 let builder_path = window.builder_path || "/builder";
 if (builder_path.startsWith("{{")) {
 	builder_path = "/builder";
+}
+// Ensure builder_path starts with the current subpath if we are in one
+const subpath = window.location.pathname.split("/builder")[0];
+if (subpath && !builder_path.startsWith(subpath)) {
+	builder_path = subpath + (builder_path.startsWith("/") ? "" : "/") + builder_path;
 }
 const router = createRouter({
 	history: createWebHistory(builder_path),

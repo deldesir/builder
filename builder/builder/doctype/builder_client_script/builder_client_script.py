@@ -57,7 +57,9 @@ class BuilderClientScript(Document):
 				script = compress(script)
 			f.write(script)
 
-		public_url = f"/files/{folder_name}/{file_name}?v={frappe.generate_hash(length=10)}"
+		from builder.utils import abs_url
+
+		public_url = abs_url(f"/files/{folder_name}/{file_name}?v={frappe.generate_hash(length=10)}")
 		self.db_set("public_url", public_url, commit=True)
 
 	def delete_script_file(self):

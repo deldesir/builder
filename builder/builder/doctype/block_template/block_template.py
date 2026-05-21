@@ -25,7 +25,8 @@ class BlockTemplate(Document):
 			_file = frappe.get_doc("File", files[0].name)
 			assets_folder_path = get_template_assets_folder_path(self)
 			shutil.copy(_file.get_full_path(), assets_folder_path)
-			self.preview = f"/builder_assets/{self.name}/{self.preview.split('/')[-1]}"
+			from builder.utils import abs_url
+			self.preview = abs_url(f"/builder_assets/{self.name}/{self.preview.split('/')[-1]}")
 			self.db_set("preview", self.preview)
 
 		block = frappe.parse_json(self.block)

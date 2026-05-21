@@ -28,6 +28,7 @@ from builder.builder.doctype.user_font.user_font import get_all_user_fonts
 from builder.export_import_standard_page import export_page_as_standard
 from builder.hooks import builder_path
 from builder.html_preview_image import generate_preview
+from builder.utils import SafeDict, abs_url
 from builder.utils import (
 	Block,
 	ColonRule,
@@ -50,7 +51,15 @@ DESKTOP_BREAKPOINT = 1024
 
 class BuilderPageRenderer(DocumentPage):
 	def can_render(self):
-		if page := find_page_with_path(self.path):
+		path = self.path.strip("/")
+		subpath = (frappe.conf.http_relative_url_root or "").strip("/")
+		if subpath:
+			if path == subpath:
+				path = ""
+			elif path.startswith(subpath + "/"):
+				path = path[len(subpath) + 1:]
+
+		if page := find_page_with_path(path):
 			self.doctype = "Builder Page"
 			self.docname = page
 			self.validate_access()
@@ -58,7 +67,7 @@ class BuilderPageRenderer(DocumentPage):
 
 		for d in get_web_pages_with_dynamic_routes():
 			try:
-				if evaluate_dynamic_routes([ColonRule(f"/{d.route}", endpoint=d.name)], self.path):
+				if evaluate_dynamic_routes([ColonRule(f"/{d.route}", endpoint=d.name)], path):
 					self.doctype = "Builder Page"
 					self.docname = d.name
 					self.validate_access()
@@ -157,7 +166,8 @@ class BuilderPage(WebsiteGenerator):
 
 	def set_preview(self):
 		if not self.preview:
-			self.preview = "/assets/builder/images/fallback.png"
+			self.preview = abs_url("/assets/builder/images/fallback.png")
+			self.flags.skip_preview = True
 		else:
 			self.flags.skip_preview = True
 
@@ -280,7 +290,7 @@ class BuilderPage(WebsiteGenerator):
 		context.fonts = fonts
 		context.__content = content
 		context.style = render_template(style, page_data)
-		context.editor_link = f"/{builder_path}/page/{self.name}"
+		context.editor_link = abs_url(f"/{builder_path}/page/{self.name}")
 		if frappe.form_dict and self.dynamic_route:
 			query_string = "&".join(
 				[
@@ -297,7 +307,7 @@ class BuilderPage(WebsiteGenerator):
 			else:
 				context.base_url = frappe.utils.get_url(self.route)
 
-		context.update(page_data)
+		context.update(SafeDict(page_data))
 
 		self.set_style_and_script(context)
 		self.set_meta_tags(context=context, page_data=page_data)
@@ -306,7 +316,7 @@ class BuilderPage(WebsiteGenerator):
 		context.page_data = clean_data(context.page_data)
 		try:
 			context["__content"] = render_template(context.__content, context)
-		except TemplateSyntaxError:
+		except Exception:
 			raise
 
 	def set_meta_tags(self, context, page_data=None):
@@ -372,8 +382,9 @@ class BuilderPage(WebsiteGenerator):
 		if self.body_html:
 			context._body_html += self.body_html
 
-		context["_head_html"] = render_template(context._head_html, context)
-		context["_body_html"] = render_template(context._body_html, context)
+		from builder.utils import rewrite_html_links
+		context["_head_html"] = rewrite_html_links(render_template(context._head_html, context))
+		context["_body_html"] = rewrite_html_links(render_template(context._body_html, context))
 
 	@frappe.whitelist()
 	def get_page_data(self, route_variables: dict | None = None) -> dict:
@@ -394,7 +405,21 @@ class BuilderPage(WebsiteGenerator):
 	def generate_page_preview_image(self, html=None):
 		public_path, local_path = get_builder_page_preview_file_paths(self)
 		if not html:
-			set_request(method="GET", path=self.route)
+			route_path = self.route
+			if route_path:
+				if ":item_code" in route_path:
+					item_code = "WEB-ITM-0007"
+					try:
+						items = frappe.get_all("Website Item", fields=["name"], limit=1)
+						if items:
+							item_code = items[0].name
+					except Exception:
+						pass
+					route_path = route_path.replace(":item_code", item_code)
+				import re
+				route_path = re.sub(r":[a-zA-Z0-9_-]+", "dummy", route_path)
+
+			set_request(method="GET", path=route_path)
 			frappe.local.request.for_preview = True
 			html = get_response_content()
 
@@ -500,9 +525,12 @@ def save_as_template(page_doc: BuilderPage):
 			record_list=[
 				["Builder Client Script", s.builder_script, "builder_client_script"] for s in scripts
 			],
-			record_module="builder",
-		)
+		record_module="builder",
+	)
 
+class SafeDict(dict):
+	def __getitem__(self, key):
+		return self.get(key, "")
 
 @frappe.whitelist()
 def get_block_data(
@@ -515,9 +543,17 @@ def get_block_data(
 	if route_variables:
 		frappe.form_dict.update({k: v for k, v in route_variables.items()})
 	frappe.has_permission("Builder Page", "write", throw=True)
-	props = frappe.parse_json(props or "{}")
+	props = SafeDict(frappe.parse_json(props or "{}"))
+
+	if not frappe.form_dict.get("name"):
+		frappe.form_dict.name = "mock-name"
+	if not frappe.form_dict.get("page"):
+		frappe.form_dict.page = "1"
+	if not frappe.form_dict.get("item_code"):
+		frappe.form_dict.item_code = "mock-item"
+
 	block_data = frappe._dict()
-	_locals = dict(block=frappe._dict(prev_block_data or {}), props=props)
+	_locals = dict(block=SafeDict(prev_block_data or {}), props=props)
 	execute_script(block_data_script, _locals, block_id)
 
 	if isinstance(_locals["block"], dict):
@@ -632,8 +668,8 @@ def get_block_context(block: dict, props: dict) -> dict:
 
 	return {
 		"block_id": block.get("blockId"),
-		"all_props": all_props,
-		"passed_down_props": passed_down_props,
+		"all_props": SafeDict(all_props),
+		"passed_down_props": SafeDict(passed_down_props),
 		"block_data_script": block.get("blockDataScript"),
 	}
 
@@ -728,8 +764,14 @@ def create_html_tag(block: dict, state: dict, ancestor_font: str | None = None) 
 
 	if element == "img":
 		attributes = block.get("attributes", {})
-		dark_src = frappe.utils.quote(attributes.get("darkSrc")) if attributes.get("darkSrc") else None
-		light_src = frappe.utils.quote(attributes.get("src")) if attributes.get("src") else None
+		dark_src = (
+			abs_url(frappe.utils.quote(attributes.get("darkSrc")))
+			if attributes.get("darkSrc")
+			else None
+		)
+		light_src = (
+			abs_url(frappe.utils.quote(attributes.get("src"))) if attributes.get("src") else None
+		)
 		if dark_src and light_src:
 			picture_tag = soup.new_tag("picture")
 
@@ -742,16 +784,25 @@ def create_html_tag(block: dict, state: dict, ancestor_font: str | None = None) 
 
 			tag = soup.new_tag("img")
 			tag.attrs = {k: v for k, v in attributes.items() if k != "darkSrc"}
+			if "src" in tag.attrs:
+				tag.attrs["src"] = abs_url(tag.attrs["src"])
 		else:
 			if dark_src:  # use as src if no light src
 				attributes["src"] = dark_src
-				del attributes["darkSrc"]
+				if "darkSrc" in attributes:
+					del attributes["darkSrc"]
 			tag = soup.new_tag(element)
 			tag.attrs = attributes.copy()
+			for attr in ["src", "href"]:
+				if attr in tag.attrs:
+					tag.attrs[attr] = abs_url(tag.attrs[attr])
 			picture_tag = None
 	else:
 		tag = soup.new_tag(element)
-		tag.attrs = block.get("attributes", {})
+		tag.attrs = block.get("attributes", {}).copy()
+		for attr in ["src", "href"]:
+			if attr in tag.attrs:
+				tag.attrs[attr] = abs_url(tag.attrs[attr])
 		picture_tag = None
 
 	for key, value in block.get("customAttributes", {}).items():
@@ -832,6 +883,8 @@ def add_inner_html_content(tag: bs.Tag, block: dict, state: dict):
 	"""Add inner HTML content to the tag."""
 	inner_content = block.get("innerHTML")
 	if inner_content:
+		from builder.utils import rewrite_html_links
+		inner_content = rewrite_html_links(inner_content)
 		# Ensure inner_content is a string before passing to BeautifulSoup
 		if not isinstance(inner_content, (str, bytes)):
 			inner_content = str(inner_content)
@@ -1370,18 +1423,30 @@ def get_web_pages_with_dynamic_routes() -> list[dict]:
 
 
 def resolve_path(path):
+	original_path = path
+	subpath = (frappe.conf.http_relative_url_root or "").strip("/")
+	normalized_path = path.strip("/")
+	if subpath:
+		if normalized_path == subpath:
+			normalized_path = ""
+		elif normalized_path.startswith(subpath + "/"):
+			normalized_path = normalized_path[len(subpath) + 1:]
+		path = normalized_path
+	else:
+		path = normalized_path
+
 	try:
 		if find_page_with_path(path):
-			return path
+			return original_path
 		elif evaluate_dynamic_routes(
 			[ColonRule(f"/{d.route}", endpoint=d.name) for d in get_web_pages_with_dynamic_routes()],
 			path,
 		):
-			return path
+			return original_path
 	except Exception:
 		pass
 
-	return original_resolve_path(path)
+	return original_resolve_path(original_path)
 
 
 def reset_with_component(block, extended_with_component, component_children):
@@ -1436,7 +1501,7 @@ def jinja_safe_key(key):
 	keys = (key or "").split(".")
 	key = f"({keys[0]} or {{}})"
 	for k in keys[1:]:
-		key = f"{key}.get('{k}', {{}})"
+		key = f"({key} or {{}}).get('{k}', {{}})"
 	return key
 
 

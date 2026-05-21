@@ -1449,6 +1449,12 @@ function executeBlockClientScriptRestricted(
 
 	const handler = {
 		get(target: Element, prop: string, receiver: any) {
+			if (prop === "__target") return target;
+			if (prop === "getElementById") return (id: string) => wrap(document.getElementById(id) as Element);
+			if (prop === "createElement") return (tag: string) => wrap(document.createElement(tag));
+			if (prop === "body") return wrap(document.body);
+			if (prop === "head") return wrap(document.head);
+
 			if (BLOCKED_GET.has(prop)) return undefined;
 
 			// Always pass `target` (not the proxy) as the receiver so that native DOM
@@ -1481,12 +1487,15 @@ function executeBlockClientScriptRestricted(
 					};
 				}
 				return (...args) => {
-					const realArgs = args.map((a) => cache.get(a) || a);
+					// Unwrap Proxy objects back to real Nodes/Elements for native methods
+					const realArgs = args.map((a) => (a && typeof a === "object" && "__target" in a ? a.__target : a));
 
 					// Do not allow inserting nodes outside the sandbox
-					for (const a of realArgs) {
-						if (a instanceof Node && !sandboxRoot.contains(a)) {
-							throw new Error("Blocked: external node insertion");
+					if (sandboxRoot) {
+						for (const a of realArgs) {
+							if (a instanceof Node && !sandboxRoot.contains(a)) {
+								throw new Error("Blocked: external node insertion");
+							}
 						}
 					}
 
@@ -1524,8 +1533,25 @@ function executeBlockClientScriptRestricted(
 		document: proxiedRoot,
 		thisRef: proxiedThis,
 		props,
+		window: {
+			getComputedStyle: (el: any) => {
+				const target = el && typeof el === "object" && "__target" in el ? el.__target : el;
+				if (!target || !(target instanceof Element)) {
+					return {
+						width: "0px",
+						height: "0px",
+						getPropertyValue: () => "",
+						display: "none",
+					} as any;
+				}
+				return window.getComputedStyle(target);
+			},
+		},
+		$clamp: (window as any).$clamp || (() => {}),
+		listen: (window as any).listen || (() => {}),
+		block_data: {},
+		dispatch: () => {},
 		// Escape hatches blocked
-		window: undefined,
 		globalThis: undefined,
 		eval: undefined,
 		Function: undefined,
@@ -1539,6 +1565,8 @@ function executeBlockClientScriptRestricted(
 			return (function() { ${userScript} }).call(thisRef);
 		}`,
 	);
+
+	if (!proxiedThis) return;
 
 	try {
 		fn.call(proxiedThis, context);

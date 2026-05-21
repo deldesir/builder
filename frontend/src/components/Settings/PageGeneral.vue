@@ -192,9 +192,11 @@ import { toast } from "frappe-ui";
 const pageStore = usePageStore();
 const builderStore = useBuilderStore();
 const isDeveloperMode = computed(() => Boolean(window.is_developer_mode));
-const fullURL = computed(
-	() => window.location.origin + (pageStore.activePage?.route ? "/" + pageStore.activePage.route : ""),
-);
+const fullURL = computed(() => {
+	const subpath = window.location.pathname.split("/builder")[0];
+	const route = pageStore.activePage?.route || "";
+	return window.location.origin + subpath + (route ? "/" + route : "");
+});
 
 const folderOptions = computed(() => {
 	const homeOption = {

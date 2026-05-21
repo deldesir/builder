@@ -13,10 +13,14 @@ def get_context(context):
 	frappe.db.commit()
 	context.csrf_token = csrf_token
 	context.site_name = frappe.local.site
+	from builder.utils import abs_url
 	context.builder_path = builder_path
 	context.builder_version = get_app_version("builder")
 	# developer mode
 	context.is_developer_mode = frappe.conf.developer_mode
 	context.is_fc_site = is_fc_site()
-	if frappe.session.user != "Guest":
+	if frappe.session.user == "Guest":
+		frappe.local.flags.redirect_location = abs_url("/login")
+		raise frappe.Redirect
+	else:
 		capture("active_site", "builder")

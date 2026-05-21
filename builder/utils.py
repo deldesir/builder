@@ -29,6 +29,56 @@ from RestrictedPython import safe_globals as restricted_safe_globals
 from werkzeug.routing import Rule
 
 
+def fix_builder_previews():
+	# Fix Builder Pages
+	pages = frappe.get_all('Builder Page', fields=['name', 'preview'])
+	count = 0
+	for p in pages:
+		if p.preview and p.preview.startswith('/files') and not p.preview.startswith('/erp'):
+			frappe.db.set_value('Builder Page', p.name, 'preview', '/erp' + p.preview)
+			count += 1
+
+	# Fix Block Templates
+	blocks = frappe.get_all('Block Template', fields=['name', 'preview'])
+	for b in blocks:
+		if b.preview and b.preview.startswith('/files') and not b.preview.startswith('/erp'):
+			frappe.db.set_value('Block Template', b.name, 'preview', '/erp' + b.preview)
+			count += 1
+
+	frappe.db.commit()
+	print(f"Updated {count} preview paths.")
+
+
+def abs_url(path):
+	if not path or not isinstance(path, str):
+		return path
+	if path.startswith("/") and not path.startswith("//"):
+		root = frappe.conf.http_relative_url_root
+		if root and not path.startswith(root):
+			return root + path
+	return path
+
+
+def rewrite_html_links(html):
+	if not html or not isinstance(html, str):
+		return html
+
+	import bs4 as bs
+	soup = bs.BeautifulSoup(html, "html.parser")
+	changed = False
+
+	for tag in soup.find_all(True):
+		for attr in ["src", "href", "action"]:
+			if tag.has_attr(attr):
+				val = tag[attr]
+				new_val = abs_url(val)
+				if new_val != val:
+					tag[attr] = new_val
+					changed = True
+
+	return str(soup) if changed else html
+
+
 def has_page_write(message: str | None = None):
 	"""Decorator to check if user has permission to edit Builder Page.
 
@@ -213,6 +263,26 @@ def remove_unsafe_fields(fields):
 	return [f for f in fields if "(" not in f]
 
 
+class SafeDict(dict):
+	def __getitem__(self, key):
+		return self.get(key, "")
+
+	def __getattr__(self, name):
+		return self.get(name, "")
+
+def safe_call(*args, **kwargs):
+	res = frappe.call(*args, **kwargs)
+	if res is None:
+		return SafeDict()
+	return res
+
+
+def safe_getattr(obj, name, default=None):
+	if isinstance(name, str) and (name.startswith("_") or "__" in name):
+		raise AttributeError("Access to private attributes is not allowed")
+	return getattr(obj, name, default)
+
+
 def get_safer_globals():
 	safe_globals = get_safe_globals()
 
@@ -233,12 +303,19 @@ def get_safer_globals():
 				get_all=safe_get_all,
 				get_list=safe_get_list,
 				get_single_value=frappe.db.get_single_value,
+				get_value=frappe.db.get_value,
 			),
 			form_dict=form_dict,
 			make_get_request=make_safe_get_request,
 			get_doc=get_doc_as_dict,
 			get_cached_doc=get_cached_doc_as_dict,
+			call=safe_call,
+			get_all=safe_get_all,
+			get_list=safe_get_list,
+			get_value=frappe.db.get_value,
+			get_single_value=frappe.db.get_single_value,
 			_=frappe._,
+			getattr=safe_getattr,
 			session=safe_globals["frappe"]["session"],
 		),
 	)
@@ -248,6 +325,8 @@ def get_safer_globals():
 	out._getattr_ = safe_globals["_getattr_"]
 	out._getiter_ = safe_globals["_getiter_"]
 	out._iter_unpack_sequence_ = safe_globals["_iter_unpack_sequence_"]
+	out._print_ = safe_globals["_print_"]
+	out._inplacevar_ = safe_globals["_inplacevar_"]
 
 	# add common python builtins
 	out.update(restricted_safe_globals)
@@ -397,15 +476,15 @@ def get_template_assets_folder_path(page_doc):
 
 
 def get_builder_page_preview_file_paths(page_doc):
-	public_path, public_path = None, None
+	public_path, local_path = None, None
 	if page_doc.is_template:
 		local_path = os.path.join(get_template_assets_folder_path(page_doc), "preview.webp")
-		public_path = f"/builder_assets/{page_doc.name}/preview.webp"
+		public_path = abs_url(f"/builder_assets/{page_doc.name}/preview.webp")
 	else:
 		file_name = f"{page_doc.name}-preview.webp"
 		local_path = os.path.join(frappe.local.site_path, "public", "files", file_name)
 		random_hash = frappe.generate_hash(length=5)
-		public_path = f"/files/{file_name}?v={random_hash}"
+		public_path = abs_url(f"/files/{file_name}?v={random_hash}")
 	return public_path, local_path
 
 
@@ -460,7 +539,6 @@ def execute_script(script, _locals, script_filename):
 		safe_exec(script, None, _locals, script_filename=script_filename)
 	else:
 		safer_exec(script, None, _locals, script_filename=script_filename)
-
 
 def get_dummy_blocks():
 	return [
@@ -709,7 +787,7 @@ def to_safe_json(data):
 
 
 def execute_script_and_combine(prev_block_data, block_data_script, props, block_id):
-	props = frappe._dict(frappe.parse_json(props or "{}"))
+	props = SafeDict(frappe.parse_json(props or "{}"))
 	block_data = frappe._dict()
 	_locals = dict(block=to_dict_with_fallback(prev_block_data or {}), props=props)
 	execute_script(unescape_html(block_data_script), _locals, f"block_script_for_{block_id}")
