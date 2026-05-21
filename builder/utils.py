@@ -263,18 +263,40 @@ def remove_unsafe_fields(fields):
 	return [f for f in fields if "(" not in f]
 
 
-class SafeDict(dict):
+class SafeDict(frappe._dict):
 	def __getitem__(self, key):
-		val = self.get(key, None)
+		val = dict.get(self, key, None)
 		if val is None:
 			return SafeDict()
+		if isinstance(val, dict) and not isinstance(val, SafeDict):
+			wrapped = SafeDict(val)
+			dict.__setitem__(self, key, wrapped)
+			return wrapped
 		return val
 
 	def __getattr__(self, name):
-		val = self.get(name, None)
+		val = dict.get(self, name, None)
 		if val is None:
 			return SafeDict()
+		if isinstance(val, dict) and not isinstance(val, SafeDict):
+			wrapped = SafeDict(val)
+			dict.__setitem__(self, name, wrapped)
+			return wrapped
 		return val
+
+	def get(self, key, default=None):
+		val = dict.get(self, key, None)
+		if val is None:
+			return default if default is not None else SafeDict()
+		if isinstance(val, dict) and not isinstance(val, SafeDict):
+			return SafeDict(val)
+		return val
+
+	def __call__(self, *args, **kwargs):
+		return SafeDict()
+
+	def __bool__(self):
+		return len(self) > 0
 
 	def __str__(self):
 		if not self:
@@ -326,8 +348,94 @@ class SafeDict(dict):
 			return 0
 		return NotImplemented
 
+def _unwrap_safedict(val):
+	"""Recursively convert SafeDict instances to plain dict/str/list."""
+	if isinstance(val, SafeDict):
+		if not val:
+			return ""
+		return {k: _unwrap_safedict(v) for k, v in val.items()}
+	if isinstance(val, dict):
+		return {k: _unwrap_safedict(v) for k, v in val.items()}
+	if isinstance(val, list):
+		return [_unwrap_safedict(v) for v in val]
+	return val
+
+
+def _coerce_arg_for_type(val, annotation):
+	"""Coerce a SafeDict value to match the expected type annotation."""
+	import json as _json
+
+	if not isinstance(val, SafeDict):
+		return val
+
+	# Check if annotation expects str (including Union types containing str)
+	origin = getattr(annotation, "__origin__", None)
+	type_args = getattr(annotation, "__args__", ())
+
+	expects_str = False
+	if annotation is str:
+		expects_str = True
+	elif origin is not None and type_args:
+		# Handle Union[str, ...] or Optional[str]
+		expects_str = str in type_args
+
+	if expects_str:
+		if not val:
+			return "{}"
+		return _json.dumps(dict(val))
+
+	# For any other type, recursively unwrap SafeDict to plain dict
+	return _unwrap_safedict(val)
+
+
 def safe_call(*args, **kwargs):
-	res = frappe.call(*args, **kwargs)
+	import json as _json
+
+	# Separate the function reference from the actual call arguments
+	if args:
+		fn_ref = args[0]
+		call_args = list(args[1:])
+	else:
+		fn_ref = kwargs.pop("fn", kwargs.pop("method", None))
+		call_args = list(args)
+
+	# Resolve the actual callable to inspect its signature
+	fn = fn_ref
+	if isinstance(fn_ref, str):
+		try:
+			fn = frappe.get_attr(fn_ref)
+		except Exception:
+			fn = None
+
+	# If we can inspect the function, coerce SafeDict args by signature
+	if fn and callable(fn):
+		try:
+			sig = inspect.signature(fn)
+			params = list(sig.parameters.values())
+
+			# Coerce positional args
+			for i, arg_val in enumerate(call_args):
+				if isinstance(arg_val, SafeDict) and i < len(params):
+					annotation = params[i].annotation
+					if annotation is not inspect.Parameter.empty:
+						call_args[i] = _coerce_arg_for_type(arg_val, annotation)
+					else:
+						call_args[i] = _unwrap_safedict(arg_val)
+
+			# Coerce keyword args
+			for kw_name, kw_val in kwargs.items():
+				if isinstance(kw_val, SafeDict) and kw_name in sig.parameters:
+					annotation = sig.parameters[kw_name].annotation
+					if annotation is not inspect.Parameter.empty:
+						kwargs[kw_name] = _coerce_arg_for_type(kw_val, annotation)
+					else:
+						kwargs[kw_name] = _unwrap_safedict(kw_val)
+		except (ValueError, TypeError):
+			# If signature inspection fails, fall back to unwrapping all SafeDicts
+			call_args = [_unwrap_safedict(a) if isinstance(a, SafeDict) else a for a in call_args]
+			kwargs = {k: _unwrap_safedict(v) if isinstance(v, SafeDict) else v for k, v in kwargs.items()}
+
+	res = frappe.call(fn_ref, *call_args, **kwargs)
 	if res is None:
 		return SafeDict()
 	return res
