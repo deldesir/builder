@@ -50,14 +50,9 @@
 			</BuilderButton>
 		</section>
 	</div>
-	<SelectFolder
-		v-model="showFolderSelectorDialog"
-		:currentFolder="builderStore.activeFolder"
-		@folderSelected="setFolder"></SelectFolder>
 </template>
 
 <script setup lang="ts">
-import SelectFolder from "@/components/Modals/SelectFolder.vue";
 import PageCard from "@/components/PageCard.vue";
 import PageListItem from "@/components/PageListItem.vue";
 import RouteTreeView from "@/components/RouteTreeView.vue";
@@ -65,10 +60,9 @@ import { useDashboardState } from "@/composables/useDashboardState";
 import { webPages } from "@/data/webPage";
 import vOnClickAndHold from "@/directives/vOnClickAndHold";
 import useBuilderStore from "@/stores/builderStore";
-import { BuilderPage } from "@/types/Builder/BuilderPage";
-import { useShortcut } from "@/utils/useShortcut";
+import { BuilderPage } from "@/types/doctypes";
 import { watchDebounced } from "@vueuse/core";
-import { createResource } from "frappe-ui";
+import { useShortcut } from "frappe-ui";
 import { useTelemetry } from "frappe-ui/frappe";
 import { onActivated, onMounted, onUnmounted, ref, watch } from "vue";
 
@@ -83,7 +77,6 @@ const {
 	displayType,
 	selectionMode,
 	selectedPages,
-	showFolderSelectorDialog,
 	expandTreeFn,
 	collapseTreeFn,
 } = useDashboardState();
@@ -220,27 +213,4 @@ watchDebounced([searchFilter, typeFilter, orderBy], fetchPages, {
 	debounce: 300,
 	immediate: true,
 });
-
-const setFolder = async (folder: string) => {
-	createResource({
-		method: "POST",
-		url: "builder.api.update_page_folder",
-	})
-		.submit({
-			pages: Array.from(selectedPages.value),
-			folder_name: folder,
-		})
-		.then(() => {
-			for (const pageName of selectedPages.value) {
-				const page = webPages.data?.find((p: BuilderPage) => p.name === pageName);
-				if (page) {
-					page.project_folder = folder;
-				}
-			}
-			selectedPages.value.clear();
-			selectionMode.value = false;
-			showFolderSelectorDialog.value = false;
-			builderStore.activeFolder = folder;
-		});
-};
 </script>
