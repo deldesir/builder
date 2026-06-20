@@ -13,7 +13,6 @@ import yaml
 from frappe.model.document import Document
 from frappe.modules.import_file import import_file_by_path
 from frappe.utils import get_url
-from frappe.utils.html_utils import unescape_html
 from frappe.utils.safe_exec import (
 	SERVER_SCRIPT_FILE_PREFIX,
 	FrappeTransformer,
@@ -29,25 +28,6 @@ from RestrictedPython import safe_globals as restricted_safe_globals
 from werkzeug.routing import Rule
 
 
-def fix_builder_previews():
-	# Fix Builder Pages
-	pages = frappe.get_all('Builder Page', fields=['name', 'preview'])
-	count = 0
-	for p in pages:
-		if p.preview and p.preview.startswith('/files') and not p.preview.startswith('/erp'):
-			frappe.db.set_value('Builder Page', p.name, 'preview', '/erp' + p.preview)
-			count += 1
-
-	# Fix Block Templates
-	blocks = frappe.get_all('Block Template', fields=['name', 'preview'])
-	for b in blocks:
-		if b.preview and b.preview.startswith('/files') and not b.preview.startswith('/erp'):
-			frappe.db.set_value('Block Template', b.name, 'preview', '/erp' + b.preview)
-			count += 1
-
-	frappe.db.commit()
-	print(f"Updated {count} preview paths.")
-
 
 def abs_url(path):
 	if not path or not isinstance(path, str):
@@ -59,45 +39,45 @@ def abs_url(path):
 	return path
 
 
-def rewrite_html_links(html):
-	if not html or not isinstance(html, str):
-		return html
 
-	import bs4 as bs
-	soup = bs.BeautifulSoup(html, "html.parser")
-	changed = False
-
-	for tag in soup.find_all(True):
-		for attr in ["src", "href", "action"]:
-			if tag.has_attr(attr):
-				val = tag[attr]
-				new_val = abs_url(val)
-				if new_val != val:
-					tag[attr] = new_val
-					changed = True
-
-	return str(soup) if changed else html
+def compact_json(obj) -> str:
+	return frappe.as_json(obj, indent=None, separators=(",", ":"))
 
 
-def has_page_write(message: str | None = None):
-	"""Decorator to check if user has permission to edit Builder Page.
+def has_page_permission(ptype: str = "write", message: str | None = None):
+	"""Decorator to check if user has the given permission on Builder Page.
 
 	Args:
+		ptype: Permission type — "read" or "write". Defaults to "write".
 		message: Custom error message to display if permission is denied.
-			 If not provided, defaults to "You do not have permission to modify pages"
+			 If not provided, a sensible default is used.
 	"""
 
 	def decorator(fn):
 		@wraps(fn)
 		def wrapper(*args, **kwargs):
-			if not frappe.has_permission("Builder Page", ptype="write"):
-				error_message = message or frappe._("You do not have permission to modify pages")
-				frappe.throw(error_message)
+			if not frappe.has_permission("Builder Page", ptype=ptype):
+				default_message = (
+					frappe._("You do not have permission to modify pages")
+					if ptype == "write"
+					else frappe._("You do not have permission to read pages")
+				)
+				frappe.throw(message or default_message)
 			return fn(*args, **kwargs)
 
 		return wrapper
 
 	return decorator
+
+
+def has_page_write(message: str | None = None):
+	"""Decorator to check if user has write permission on Builder Page."""
+	return has_page_permission(ptype="write", message=message)
+
+
+def has_page_read(message: str | None = None):
+	"""Decorator to check if user has read permission on Builder Page."""
+	return has_page_permission(ptype="read", message=message)
 
 
 @dataclass
@@ -140,7 +120,6 @@ class Block:
 	customAttributes: ClassVar[dict] = {}
 	dynamicValues: ClassVar[list[BlockDataKey]] = []
 	blockClientScript: str = ""
-	blockDataScript: str = ""
 	props: ClassVar[dict] = {}
 
 	def __init__(self, **kwargs) -> None:
@@ -207,7 +186,6 @@ class Block:
 			"customAttributes": self.customAttributes,
 			"dynamicValues": self.dynamicValues,
 			"blockClientScript": self.blockClientScript,
-			"blockDataScript": self.blockDataScript,
 			"props": self.props,
 		}
 
@@ -263,190 +241,6 @@ def remove_unsafe_fields(fields):
 	return [f for f in fields if "(" not in f]
 
 
-class SafeDict(frappe._dict):
-	def __getitem__(self, key):
-		val = dict.get(self, key, None)
-		if val is None:
-			return SafeDict()
-		if isinstance(val, dict) and not isinstance(val, SafeDict):
-			wrapped = SafeDict(val)
-			dict.__setitem__(self, key, wrapped)
-			return wrapped
-		return val
-
-	def __getattr__(self, name):
-		val = dict.get(self, name, None)
-		if val is None:
-			return SafeDict()
-		if isinstance(val, dict) and not isinstance(val, SafeDict):
-			wrapped = SafeDict(val)
-			dict.__setitem__(self, name, wrapped)
-			return wrapped
-		return val
-
-	def get(self, key, default=None):
-		val = dict.get(self, key, None)
-		if val is None:
-			return default if default is not None else SafeDict()
-		if isinstance(val, dict) and not isinstance(val, SafeDict):
-			return SafeDict(val)
-		return val
-
-	def __call__(self, *args, **kwargs):
-		return SafeDict()
-
-	def __bool__(self):
-		return len(self) > 0
-
-	def __str__(self):
-		if not self:
-			return ""
-		return super().__str__()
-
-	def __html__(self):
-		if not self:
-			return ""
-		return super().__html__()
-
-	def __int__(self):
-		if not self:
-			return 0
-		return int(super().__str__())
-
-	def __float__(self):
-		if not self:
-			return 0.0
-		return float(super().__str__())
-
-	def __add__(self, other):
-		if not self:
-			return other
-		return NotImplemented
-
-	def __radd__(self, other):
-		if not self:
-			return other
-		return NotImplemented
-
-	def __sub__(self, other):
-		if not self:
-			return -other
-		return NotImplemented
-
-	def __rsub__(self, other):
-		if not self:
-			return other
-		return NotImplemented
-
-	def __mul__(self, other):
-		if not self:
-			return 0
-		return NotImplemented
-
-	def __rmul__(self, other):
-		if not self:
-			return 0
-		return NotImplemented
-
-def _unwrap_safedict(val):
-	"""Recursively convert SafeDict instances to plain dict/str/list."""
-	if isinstance(val, SafeDict):
-		if not val:
-			return ""
-		return {k: _unwrap_safedict(v) for k, v in val.items()}
-	if isinstance(val, dict):
-		return {k: _unwrap_safedict(v) for k, v in val.items()}
-	if isinstance(val, list):
-		return [_unwrap_safedict(v) for v in val]
-	return val
-
-
-def _coerce_arg_for_type(val, annotation):
-	"""Coerce a SafeDict value to match the expected type annotation."""
-	import json as _json
-
-	if not isinstance(val, SafeDict):
-		return val
-
-	# Check if annotation expects str (including Union types containing str)
-	origin = getattr(annotation, "__origin__", None)
-	type_args = getattr(annotation, "__args__", ())
-
-	expects_str = False
-	if annotation is str:
-		expects_str = True
-	elif origin is not None and type_args:
-		# Handle Union[str, ...] or Optional[str]
-		expects_str = str in type_args
-
-	if expects_str:
-		if not val:
-			return "{}"
-		return _json.dumps(dict(val))
-
-	# For any other type, recursively unwrap SafeDict to plain dict
-	return _unwrap_safedict(val)
-
-
-def safe_call(*args, **kwargs):
-	import json as _json
-
-	# Separate the function reference from the actual call arguments
-	if args:
-		fn_ref = args[0]
-		call_args = list(args[1:])
-	else:
-		fn_ref = kwargs.pop("fn", kwargs.pop("method", None))
-		call_args = list(args)
-
-	# Resolve the actual callable to inspect its signature
-	fn = fn_ref
-	if isinstance(fn_ref, str):
-		try:
-			fn = frappe.get_attr(fn_ref)
-		except Exception:
-			fn = None
-
-	# If we can inspect the function, coerce SafeDict args by signature
-	if fn and callable(fn):
-		try:
-			sig = inspect.signature(fn)
-			params = list(sig.parameters.values())
-
-			# Coerce positional args
-			for i, arg_val in enumerate(call_args):
-				if isinstance(arg_val, SafeDict) and i < len(params):
-					annotation = params[i].annotation
-					if annotation is not inspect.Parameter.empty:
-						call_args[i] = _coerce_arg_for_type(arg_val, annotation)
-					else:
-						call_args[i] = _unwrap_safedict(arg_val)
-
-			# Coerce keyword args
-			for kw_name, kw_val in kwargs.items():
-				if isinstance(kw_val, SafeDict) and kw_name in sig.parameters:
-					annotation = sig.parameters[kw_name].annotation
-					if annotation is not inspect.Parameter.empty:
-						kwargs[kw_name] = _coerce_arg_for_type(kw_val, annotation)
-					else:
-						kwargs[kw_name] = _unwrap_safedict(kw_val)
-		except (ValueError, TypeError):
-			# If signature inspection fails, fall back to unwrapping all SafeDicts
-			call_args = [_unwrap_safedict(a) if isinstance(a, SafeDict) else a for a in call_args]
-			kwargs = {k: _unwrap_safedict(v) if isinstance(v, SafeDict) else v for k, v in kwargs.items()}
-
-	res = frappe.call(fn_ref, *call_args, **kwargs)
-	if res is None:
-		return SafeDict()
-	return res
-
-
-def safe_getattr(obj, name, default=None):
-	if isinstance(name, str) and (name.startswith("_") or "__" in name):
-		raise AttributeError("Access to private attributes is not allowed")
-	return getattr(obj, name, default)
-
-
 def get_safer_globals():
 	safe_globals = get_safe_globals()
 
@@ -467,19 +261,12 @@ def get_safer_globals():
 				get_all=safe_get_all,
 				get_list=safe_get_list,
 				get_single_value=frappe.db.get_single_value,
-				get_value=frappe.db.get_value,
 			),
 			form_dict=form_dict,
 			make_get_request=make_safe_get_request,
 			get_doc=get_doc_as_dict,
 			get_cached_doc=get_cached_doc_as_dict,
-			call=safe_call,
-			get_all=safe_get_all,
-			get_list=safe_get_list,
-			get_value=frappe.db.get_value,
-			get_single_value=frappe.db.get_single_value,
 			_=frappe._,
-			getattr=safe_getattr,
 			session=safe_globals["frappe"]["session"],
 		),
 	)
@@ -489,8 +276,6 @@ def get_safer_globals():
 	out._getattr_ = safe_globals["_getattr_"]
 	out._getiter_ = safe_globals["_getiter_"]
 	out._iter_unpack_sequence_ = safe_globals["_iter_unpack_sequence_"]
-	out._print_ = safe_globals["_print_"]
-	out._inplacevar_ = safe_globals["_inplacevar_"]
 
 	# add common python builtins
 	out.update(restricted_safe_globals)
@@ -534,10 +319,6 @@ def sync_page_templates():
 	builder_script_path = frappe.get_module_path("builder", "builder_script")
 	make_records(builder_script_path)
 
-	print("Syncing Builder Page Templates")
-	builder_page_template_path = frappe.get_module_path("builder", "builder_page_template")
-	make_records(builder_page_template_path)
-
 
 def sync_block_templates():
 	print("Syncing Builder Block Templates")
@@ -559,7 +340,7 @@ def make_records(path):
 			import_file_by_path(f"{path}/{fname}/{fname}.json")
 
 
-def copy_img_to_asset_folder(block, page_doc):
+def copy_img_to_asset_folder(block, page_doc, app=None):
 	def safe_get(obj, attr, default=None):
 		if isinstance(obj, dict):
 			return obj.get(attr, default)
@@ -590,10 +371,10 @@ def copy_img_to_asset_folder(block, page_doc):
 			files = frappe.get_all("File", filters={"file_url": src}, fields=["name"])
 			if files:
 				_file = frappe.get_doc("File", files[0].name)
-				assets_folder_path = get_template_assets_folder_path(page_doc)
+				assets_folder_path = get_template_assets_folder_path(page_doc, app=app)
 				shutil.copy(_file.get_full_path(), assets_folder_path)
 
-			new_src = f"/builder_assets/{page_doc.name}/{src.split('/')[-1]}"
+			new_src = f"{get_template_assets_public_path(page_doc)}/{src.split('/')[-1]}"
 			if attributes:
 				if isinstance(attributes, dict):
 					attributes["src"] = new_src
@@ -602,21 +383,51 @@ def copy_img_to_asset_folder(block, page_doc):
 
 	children = safe_get(block, "children", [])
 	for child in children or []:
-		copy_img_to_asset_folder(child, page_doc)
+		copy_img_to_asset_folder(child, page_doc, app=app)
 
 
-def get_template_assets_folder_path(page_doc):
-	path = os.path.join(frappe.get_app_path("builder"), "www", "builder_assets", page_doc.name)
+def get_template_assets_subfolder(page_doc):
+	"""Relative folder under www/builder_assets for a page's exported assets.
+
+	Template-group pages are namespaced under their group folder so multiple
+	templates can ship assets without colliding."""
+	if getattr(page_doc, "is_template", None) and getattr(page_doc, "template_group", None):
+		return os.path.join(frappe.scrub(page_doc.template_group), str(page_doc.name))
+	return str(page_doc.name)
+
+
+def get_template_assets_public_path(page_doc):
+	"""Public URL prefix (no trailing slash) for a page's exported assets.
+
+	App-agnostic: whichever app/site serves the assets does so under
+	/builder_assets/, so only the filesystem write root (below) varies by app."""
+	return f"/builder_assets/{get_template_assets_subfolder(page_doc).replace(os.sep, '/')}"
+
+
+def template_target_app():
+	"""App whose www/builder_assets directory holds exported template assets.
+	Defaults to builder; the hub site sets template_target_app=builder_hub so
+	template authoring on the hub writes assets into the hub app."""
+	return frappe.conf.get("template_target_app") or "builder"
+
+
+def get_template_assets_folder_path(page_doc, app=None):
+	path = os.path.join(
+		frappe.get_app_path(app or template_target_app()),
+		"www",
+		"builder_assets",
+		get_template_assets_subfolder(page_doc),
+	)
 	if not os.path.exists(path):
 		os.makedirs(path)
 	return path
 
 
-def get_builder_page_preview_file_paths(page_doc):
+def get_builder_page_preview_file_paths(page_doc, app=None):
 	public_path, local_path = None, None
 	if page_doc.is_template:
-		local_path = os.path.join(get_template_assets_folder_path(page_doc), "preview.webp")
-		public_path = abs_url(f"/builder_assets/{page_doc.name}/preview.webp")
+		local_path = os.path.join(get_template_assets_folder_path(page_doc, app=app), "preview.webp")
+		public_path = f"{get_template_assets_public_path(page_doc)}/preview.webp"
 	else:
 		file_name = f"{page_doc.name}-preview.webp"
 		local_path = os.path.join(frappe.local.site_path, "public", "files", file_name)
@@ -677,25 +488,6 @@ def execute_script(script, _locals, script_filename):
 	else:
 		safer_exec(script, None, _locals, script_filename=script_filename)
 
-def get_dummy_blocks():
-	return [
-		{
-			"element": "div",
-			"extendedFromComponent": "component-1",
-			"children": [
-				{
-					"element": "div",
-					"children": [
-						{
-							"element": "div",
-							"extendedFromComponent": "component-2",
-							"children": [],
-						},
-					],
-				},
-			],
-		},
-	]
 
 def clean_data(data):
 	if isinstance(data, dict):
@@ -895,22 +687,13 @@ def get_export_paths(app_path, export_name):
 
 
 def to_dict_with_fallback(obj):
-	if isinstance(obj, dict):
-		return SafeDict({k: to_dict_with_fallback(v) for k, v in obj.items()})
-	elif isinstance(obj, list):
-		return [to_dict_with_fallback(v) for v in obj]
-	elif obj is None:
-		return SafeDict()
-	elif isinstance(obj, (str, int, float, bool)):
-		return obj
 	try:
-		if hasattr(obj, "as_dict"):
-			return to_dict_with_fallback(obj.as_dict())
 		return frappe._dict(obj)
-	except (TypeError, ValueError):
+	except TypeError:
 		if isinstance(obj, Document):
-			return to_dict_with_fallback(obj.as_dict())
-		return obj
+			return obj.as_dict()
+		else:
+			raise
 
 
 def combine(a, b):
@@ -929,15 +712,6 @@ def hash(s):
 
 def to_safe_json(data):
 	return frappe.as_json(data or {})
-
-
-def execute_script_and_combine(prev_block_data, block_data_script, props, block_id):
-	props = SafeDict(frappe.parse_json(props or "{}"))
-	block_data = frappe._dict()
-	_locals = dict(block=to_dict_with_fallback(prev_block_data or {}), props=props)
-	execute_script(unescape_html(block_data_script), _locals, f"block_script_for_{block_id}")
-	block_data.update(_locals["block"])
-	return combine(prev_block_data, block_data)
 
 
 class CompactDumper(yaml.Dumper):

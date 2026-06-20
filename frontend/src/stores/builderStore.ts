@@ -32,11 +32,11 @@ const useBuilderStore = defineStore("builderStore", {
 			optionsPanelWidth: 57,
 		},
 		leftPanelActiveTab: <LeftSidebarTabOption>"Layers",
-		rightPanelActiveTab: <RightSidebarTabOption>"Properties",
 		showRightPanel: <boolean>true,
 		showLeftPanel: <boolean>true,
+		showVersionHistory: <boolean>false,
 		showHTMLDialog: false,
-		showDataScriptDialog: <"block" | "page" | null>null,
+		showDataScriptDialog: <"page" | null>null,
 		realtime: new RealTimeHandler(),
 		readOnlyMode: false,
 		viewers: <UserInfo[]>[],
@@ -45,10 +45,11 @@ const useBuilderStore = defineStore("builderStore", {
 		isDark: useDark({
 			attribute: "data-theme",
 		}),
-		highlightBlocksWithDataScripts: false,
+		canvasDarkMode: useStorage("canvasDarkMode", false),
 		highlightBlocksWithClientScripts: false,
 		showSettingsDialog: false,
 		settingsActiveTab: <string>"page_general",
+		openImageUpload: false,
 	}),
 	getters: {
 		isAIEnabled(): boolean {

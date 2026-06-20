@@ -20,7 +20,7 @@
 							<Autocomplete
 								class="[&>div>input]:pl-8"
 								:class="{
-									'[&>div>div>input]:text-sm [&>div>div>input]:text-ink-violet-1 [&>div>input]:font-mono':
+									'[&>div>div>input]:text-sm [&>div>div>input]:text-ink-violet-6 [&>div>input]:font-mono':
 										isCssVariable,
 								}"
 								v-bind="events"
@@ -28,8 +28,8 @@
 								:referenceElementSelector="autocompleteReferenceElementSelector"
 								@keydown.enter="handleEnter"
 								@focus="togglePopover"
-								:placeholder="placeholder"
-								:modelValue="modelValue"
+								:placeholder="displayPlaceholder"
+								:modelValue="displayValue"
 								:getOptions="getOptions"
 								:actionButton="
 									modelValue && !isCssVariable && props.showColorVariableOptions
@@ -63,19 +63,17 @@
 <script setup lang="ts">
 import Autocomplete from "@/components/Controls/Autocomplete.vue";
 import NewBuilderVariable from "@/components/Modals/NewBuilderVariable.vue";
+import useBuilderStore from "@/stores/builderStore";
 import { BuilderVariable } from "@/types/doctypes";
 import { getColorVariableOptions } from "@/utils/colorOptions";
-import { getRGB, toKebabCase } from "@/utils/helpers";
+import { getRGB } from "@/utils/helpers";
 import { useBuilderVariable } from "@/utils/useBuilderVariable";
-import { useDark } from "@vueuse/core";
 import { Tooltip } from "frappe-ui";
 import { computed, ComputedRef, nextTick, onMounted, ref, useAttrs, watch } from "vue";
 import ColorPicker from "./ColorPicker.vue";
 import InputLabel from "./InputLabel.vue";
 
-const isDark = useDark({
-	attribute: "data-theme",
-});
+const builderStore = useBuilderStore();
 
 const attrs = useAttrs();
 const events = Object.fromEntries(
@@ -86,7 +84,7 @@ const colorInput = ref<typeof Autocomplete | null>(null);
 const colorPickerRef = ref<typeof ColorPicker | null>(null);
 const showVariableDialog = ref(false);
 const newVariable = ref<Partial<BuilderVariable> | null>(null);
-const { variables, resolveVariableValue } = useBuilderVariable();
+const { variables, resolveVariableValue, getVariableName } = useBuilderVariable();
 
 const handleEnter = () => {
 	const val = props.modelValue;
@@ -197,10 +195,27 @@ const isCssVariable = computed(() => {
 const resolvedColor = computed(() => {
 	if (!props.modelValue) return "";
 	if (isCssVariable.value) {
-		return resolveVariableValue(props.modelValue, isDark.value);
+		return resolveVariableValue(props.modelValue, builderStore.canvasDarkMode);
 	}
 	return props.modelValue;
 }) as ComputedRef<HashString | RGBString>;
+
+// show the variable's name instead of its raw value e.g. var(--uuid)
+const displayValue = computed(() => {
+	if (props.modelValue && isCssVariable.value) {
+		return getVariableName(props.modelValue) ?? props.modelValue;
+	}
+	return props.modelValue;
+});
+
+// resolve the placeholder (e.g. inherited/cascading color) to a variable name when it is a CSS variable
+const displayPlaceholder = computed(() => {
+	const placeholder = props.placeholder;
+	if (typeof placeholder === "string" && (placeholder.startsWith("var(--") || placeholder.startsWith("--"))) {
+		return getVariableName(placeholder) ?? placeholder;
+	}
+	return placeholder;
+});
 
 const emit = defineEmits(["update:modelValue"]);
 
@@ -221,7 +236,7 @@ const openVariableDialog = () => {
 };
 
 const handleVariableSaved = (savedVariable: BuilderVariable) => {
-	emit("update:modelValue", `var(--${toKebabCase(savedVariable.variable_name || "")})`);
+	emit("update:modelValue", `var(--${savedVariable.name})`);
 };
 
 const getOptions = async (query: string) => {
@@ -233,7 +248,7 @@ const getOptions = async (query: string) => {
 		query,
 		variables.value,
 		resolveVariableValue,
-		isDark.value,
+		builderStore.canvasDarkMode,
 		(builderVariable) => {
 			colorPickerRef.value?.togglePopover(false);
 			newVariable.value = { ...builderVariable };

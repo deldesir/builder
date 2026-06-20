@@ -2,7 +2,7 @@
 	<div
 		:class="[
 			'color-picker-container flex flex-col gap-2',
-			renderMode === 'inline' ? 'w-full' : 'rounded-lg bg-surface-white p-3 shadow-lg',
+			renderMode === 'inline' ? 'w-full' : 'rounded-lg bg-surface-base p-3 shadow-lg',
 		]">
 		<div
 			ref="colorMap"
@@ -42,7 +42,7 @@
 		</div>
 		<Autocomplete
 			v-if="showInput"
-			:modelValue="modelValue"
+			:modelValue="displayValue"
 			class="mt-2 w-full text-sm [&>div>div>input]:text-sm"
 			placeholder="Set Color"
 			:getOptions="getOptions"
@@ -53,17 +53,18 @@
 <script setup lang="ts">
 import Autocomplete from "@/components/Controls/Autocomplete.vue";
 import EyeDropperIcon from "@/components/Icons/EyeDropper.vue";
+import useBuilderStore from "@/stores/builderStore";
 import useCanvasStore from "@/stores/canvasStore";
 import { getColorVariableOptions } from "@/utils/colorOptions";
 import { HSVToHex, HexToHSV, getRGB } from "@/utils/helpers";
 import { useBuilderVariable } from "@/utils/useBuilderVariable";
-import { clamp, useDark, useElementBounding, useEyeDropper } from "@vueuse/core";
+import { clamp, useElementBounding, useEyeDropper } from "@vueuse/core";
 import { Ref, StyleValue, computed, nextTick, ref, watch } from "vue";
 
 type CSSColorValue = HashString | RGBString | `var(--${string})`;
 
-const { variables, resolveVariableValue } = useBuilderVariable();
-const isDark = useDark({ attribute: "data-theme" });
+const { variables, resolveVariableValue, getVariableName } = useBuilderVariable();
+const builderStore = useBuilderStore();
 const canvasStore = useCanvasStore();
 
 const colorMap = ref(null) as unknown as Ref<HTMLDivElement>;
@@ -113,8 +114,16 @@ const modelColor = computed(() => {
 	return getRGB(resolveVariableValue(color));
 });
 
+// show the variable's name instead of its raw value e.g. var(--uuid)
+const displayValue = computed(() => {
+	if (props.modelValue && (props.modelValue.startsWith("var(--") || props.modelValue.startsWith("--"))) {
+		return getVariableName(props.modelValue) ?? props.modelValue;
+	}
+	return props.modelValue;
+});
+
 const getOptions = async (query: string) =>
-	getColorVariableOptions(query, variables.value, resolveVariableValue, isDark.value);
+	getColorVariableOptions(query, variables.value, resolveVariableValue, builderStore.canvasDarkMode);
 
 const emit = defineEmits(["update:modelValue"]);
 
@@ -153,7 +162,7 @@ const hueMapStyle = computed(() => ({
 }));
 
 const alphaMapStyle = computed(() => ({
-	background: `linear-gradient(90deg, transparent, ${liveSolidColor.value}), repeating-conic-gradient(#ccc 0% 25%, var(--surface-white) 0% 50%) 0 0 / 8px 8px`,
+	background: `linear-gradient(90deg, transparent, ${liveSolidColor.value}), repeating-conic-gradient(#ccc 0% 25%, var(--surface-base) 0% 50%) 0 0 / 8px 8px`,
 }));
 
 const selectorClass =
@@ -205,7 +214,7 @@ const handleInputChange = (color: string | null) => {
 	if (!color) return emit("update:modelValue", null);
 	if (color.startsWith("var(--") || color.startsWith("--"))
 		return emit("update:modelValue", color.startsWith("var(--") ? color : `var(${color})`);
-	selectColor(color as HashString);
+	selectColor((getRGB(color) ?? color) as HashString);
 };
 
 const setColorSelectorPosition = (color: string) => {

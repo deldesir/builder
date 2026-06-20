@@ -11,15 +11,29 @@
 		<div
 			class="fixed flex gap-40"
 			:class="{
-				'scheme-dark': builderStore.isDark,
+				'scheme-dark': builderStore.canvasDarkMode,
 			}"
 			ref="canvas"
 			:style="{
 				transformOrigin: 'top center',
 				transform: `scale(${canvasProps.scale}) translate(${canvasProps.translateX}px, ${canvasProps.translateY}px)`,
 				'--canvas-scale': canvasProps.scale,
+				colorScheme: builderStore.canvasDarkMode ? 'dark' : 'light',
 			}">
-			<div class="absolute right-0 top-[-60px] flex rounded-md bg-surface-white px-3">
+			<div class="absolute right-0 top-[-60px] flex rounded-md bg-surface-base px-3">
+				<Tooltip text="Toggle Canvas Dark Mode" :hoverDelay="0.6">
+					<div
+						v-show="!canvasProps.scaling && !canvasProps.panning"
+						class="w-auto cursor-pointer p-2"
+						@click.stop="builderStore.canvasDarkMode = !builderStore.canvasDarkMode">
+						<span
+							:class="[builderStore.canvasDarkMode ? 'lucide-sun' : 'lucide-moon', 'h-8 w-6 text-ink-gray-8']"
+							aria-hidden="true" />
+					</div>
+				</Tooltip>
+				<div
+					v-show="!canvasProps.scaling && !canvasProps.panning"
+					class="m-2 my-3 w-px bg-[var(--outline-gray-2)]"></div>
 				<div
 					v-show="!canvasProps.scaling && !canvasProps.panning"
 					class="w-auto cursor-pointer p-2"
@@ -36,7 +50,7 @@
 				</div>
 			</div>
 			<div
-				class="canvas relative flex h-full bg-surface-white shadow-2xl contain-layout"
+				class="canvas relative flex h-full bg-surface-base shadow-xl contain-layout"
 				:data-breakpoint="breakpoint.device"
 				:style="{
 					...canvasStyles,
@@ -47,7 +61,7 @@
 				v-show="breakpoint.visible"
 				:key="breakpoint.device">
 				<div
-					class="absolute left-0 cursor-pointer select-none text-3xl text-ink-gray-7"
+					class="absolute left-0 cursor-pointer select-none text-5xl text-ink-gray-7"
 					:style="{
 						fontSize: `calc(${12}px * 1/${canvasProps.scale})`,
 						top: `calc(${-20}px * 1/${canvasProps.scale})`,
@@ -68,7 +82,7 @@
 			</div>
 		</div>
 		<div
-			class="fixed bottom-12 left-[50%] flex translate-x-[-50%] cursor-default items-center justify-center gap-2 rounded-lg bg-surface-white px-3 py-2 text-center text-sm font-semibold text-ink-gray-7 shadow-md"
+			class="text-sm-semibold fixed bottom-12 left-[50%] flex translate-x-[-50%] cursor-default items-center justify-center gap-2 rounded-lg bg-surface-base px-3 py-2 text-center text-ink-gray-7 shadow-md"
 			v-show="!canvasProps.panning">
 			{{ Math.round(canvasProps.scale * 100) + "%" }}
 			<div class="ml-2 cursor-pointer" @click="setScaleAndTranslate">
@@ -113,6 +127,7 @@ import { useCanvasDropZone } from "@/utils/useCanvasDropZone";
 import { useCanvasEvents } from "@/utils/useCanvasEvents";
 import { useCanvasMarqueeSelection } from "@/utils/useCanvasMarqueeSelection";
 import { useCanvasUtils } from "@/utils/useCanvasUtils";
+import { Tooltip } from "frappe-ui";
 import { Ref, computed, onMounted, onUnmounted, provide, reactive, ref, watch } from "vue";
 import setPanAndZoom from "../utils/panAndZoom";
 import BlockSnapGuides from "./BlockSnapGuides.vue";
@@ -127,7 +142,7 @@ const { cssVariables, darkCssVariables } = useBuilderVariable();
 const variables = computed(() => {
 	return {
 		...cssVariables.value,
-		...(builderStore.isDark ? darkCssVariables.value : {}),
+		...(builderStore.canvasDarkMode ? darkCssVariables.value : {}),
 	};
 });
 
@@ -242,6 +257,13 @@ onMounted(() => {
 	setScaleAndTranslate();
 	showBlocks.value = true;
 	setupHistory();
+	// a read-only canvas (version preview / protected page) fully disables history;
+	// editing the canvas re-enables it
+	watch(
+		() => builderStore.readOnlyMode,
+		(readOnly) => (readOnly ? history.value?.disable() : history.value?.enable()),
+		{ immediate: true },
+	);
 	useCanvasEvents(
 		canvasContainer as unknown as Ref<HTMLElement>,
 		canvasProps,
@@ -433,5 +455,11 @@ const renderedBreakpoints = computed(() => canvasProps.breakpoints.filter((bp) =
 /* Lightweight marquee-drag highlight — applied via DOM attribute, not Vue reactive state */
 .__builder_component__[data-marquee-selected] {
 	box-shadow: inset 0 0 0 calc(2px / var(--canvas-scale, 1)) theme("colors.blue.400 / 85%");
+}
+
+.canvas-container {
+	p:not(:where(.prose, .ProseMirror) *) {
+		line-height: revert;
+	}
 }
 </style>

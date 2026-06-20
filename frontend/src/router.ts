@@ -83,6 +83,12 @@ const routes = [
 		beforeEnter: validateVisit,
 		component: () => import("@/pages/PagePreview.vue"),
 	},
+	{
+		path: "/persona-survey",
+		name: "persona-survey",
+		beforeEnter: validateVisit,
+		component: () => import("@/pages/PagePersonaSurvey.vue"),
+	},
 ];
 
 declare global {
