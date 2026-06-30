@@ -136,6 +136,7 @@ import usePageStore from "@/stores/pageStore";
 import { BuilderPage } from "@/types/doctypes";
 import { getUsersInfo } from "@/usersInfo";
 import blockController from "@/utils/blockController";
+import componentController from "@/utils/componentController.js";
 import { getBlockInstance, getBlockObject, getRootBlockTemplate } from "@/utils/helpers";
 import { useBuilderEvents } from "@/utils/useBuilderEvents";
 import { breakpointsTailwind, useBreakpoints, useDebounceFn, useEventListener } from "@vueuse/core";
@@ -353,6 +354,9 @@ useEventListener(document, "keyup", (e) => {
 });
 
 async function saveAndExitFragmentMode(e: Event) {
+	if (canvasStore.fragmentData.fragmentType === "component") {
+		componentController.applyComponentDoc();
+	}
 	await canvasStore.fragmentData.saveAction?.(fragmentCanvas.value?.getRootBlock());
 	fragmentCanvas.value?.toggleDirty(false);
 	canvasStore.exitFragmentMode(e);
@@ -379,16 +383,12 @@ let expandedEditorOptions = computed(() => {
 function getExpandedEditorContent() {
 	if (canvasStore.editingContentType === "html") {
 		return canvasStore.editableBlock?.getInnerHTML();
-	} else if (canvasStore.editingContentType === "js") {
-		return canvasStore.editableBlock?.getBlockClientScript();
 	}
 }
 
 async function saveExpandedEditorContent(val: string) {
 	if (canvasStore.editingContentType === "html") {
 		canvasStore.editableBlock?.setInnerHTML(val);
-	} else if (canvasStore.editingContentType === "js") {
-		canvasStore.editableBlock?.setBlockClientScript(val);
 	}
 	canvasStore.showEditorDialog = false;
 }
