@@ -26,7 +26,7 @@
 				colorScheme: builderStore.canvasDarkMode ? 'dark' : 'light',
 			}">
 			<div class="absolute right-0 top-[-60px] flex rounded-md bg-surface-base px-3">
-				<Tooltip text="Toggle Canvas Dark Mode" :hoverDelay="0.6">
+				<Tooltip text="Toggle Canvas Dark Mode (⌘⇧D)" :hoverDelay="0.6">
 					<div
 						v-show="!canvasProps.scaling && !canvasProps.panning"
 						class="w-auto cursor-pointer p-2"
@@ -66,7 +66,7 @@
 				v-show="breakpoint.visible"
 				:key="breakpoint.device">
 				<div
-					class="absolute left-0 cursor-pointer select-none text-5xl text-ink-gray-7"
+					class="absolute left-0 cursor-pointer select-none text-4xl text-ink-gray-7"
 					:style="{
 						fontSize: `calc(${12}px * 1/${canvasProps.scale})`,
 						top: `calc(${-20}px * 1/${canvasProps.scale})`,
@@ -100,6 +100,7 @@
 			id="overlay"
 			ref="overlay" />
 		<div v-show="marquee.visible" class="pointer-events-none fixed z-[200]" :style="marqueeStyle" />
+		<DropIndicator />
 		<div class="absolute top-0 order-1 w-full">
 			<slot name="header"></slot>
 		</div>
@@ -143,6 +144,7 @@ import { Ref, computed, onMounted, onUnmounted, provide, reactive, ref, useId, w
 import setPanAndZoom from "../utils/panAndZoom";
 import BlockSnapGuides from "./BlockSnapGuides.vue";
 import BuilderBlock from "./BuilderBlock.vue";
+import DropIndicator from "./DropIndicator.vue";
 import FitScreenIcon from "./Icons/FitScreen.vue";
 
 const builderStore = useBuilderStore();
@@ -509,5 +511,10 @@ const renderedBreakpoints = computed(() => canvasProps.breakpoints.filter((bp) =
 	p:not(:where(.prose, .ProseMirror) *) {
 		line-height: revert;
 	}
+}
+
+/* mirrors the published-page default in webpage_scripts.html */
+.scheme-dark img:not([data-dark-src]) {
+	filter: brightness(0.85) contrast(1.05);
 }
 </style>
