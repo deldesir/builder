@@ -1,6 +1,10 @@
 <template>
 	<component :is="block.getTag()" ref="component" :key="editor" class="__text_block__">
-		<div v-html="textContent" v-show="!editor && textContent" @click="handleClick"></div>
+		<div
+			class="__text_content__ bg-clip-[inherit] bg-inherit [-webkit-background-clip:inherit] [background-image:inherit]"
+			v-html="textContent"
+			v-show="!editor && textContent"
+			@click="handleClick"></div>
 		<TextBlockBubbleMenu
 			v-if="editor"
 			:block="block"
@@ -18,7 +22,7 @@
 			v-on-click-outside="handleClickOutside"
 			@mouseup="selectionTriggered = false"
 			v-if="editor && showEditor"
-			class="bg-clip-[inherit] relative bg-inherit [-webkit-background-clip:inherit] [background-image:inherit]"
+			class="__text_editor__ bg-clip-[inherit] relative bg-inherit [-webkit-background-clip:inherit] [background-image:inherit]"
 			:style="block.getRawStyles()"
 			@keydown="(e: KeyboardEvent) => bubbleMenu?.handleKeydown(e)" />
 		<slot />
@@ -30,8 +34,8 @@ import type Block from "@/block";
 import TextBlockBubbleMenu from "@/components/TextBlockBubbleMenu.vue";
 import useCanvasStore from "@/stores/canvasStore";
 import blockController from "@/utils/blockController";
+import { BlockValueResolver } from "@/utils/blockValueResolver";
 import { setFontFromHTML } from "@/utils/fontManager";
-import { getDataForKey, getPropValue } from "@/utils/helpers";
 import type { PauseId } from "@/utils/useCanvasHistory";
 import { Color } from "@tiptap/extension-color";
 import { FontFamily } from "@tiptap/extension-font-family";
@@ -99,76 +103,24 @@ const FontFamilyPasteRule = Extension.create({
 	},
 });
 
-const hasBlockProps = computed(() => {
-	return props.defaultProps || Object.keys(props.block.getBlockProps()).length > 0;
-});
-
-const hasComponentData = computed(() => {
-	return props.componentData && Object.keys(props.componentData).length > 0;
+const valueResolver = new BlockValueResolver({
+	block: () => props.block,
+	data: () => props.data ?? null,
+	componentData: () => props.componentData ?? null,
+	defaultProps: () => props.defaultProps ?? null,
 });
 
 const textContent = computed(() => {
 	let innerHTML = props.block.getInnerHTML();
-	if (props.data || hasBlockProps.value || hasComponentData.value) {
-		const dynamicContent = getDynamicContent();
-		if (dynamicContent) {
-			innerHTML = dynamicContent;
-		}
+	const dynamicContent = getDynamicContent();
+	if (dynamicContent) {
+		innerHTML = dynamicContent;
 	}
 	return String(innerHTML ?? "");
 });
 
-const getDataScriptValue = (path: string): any => {
-	return getDataForKey(props.data, path);
-};
-
-const getComponentDataValue = (path: string): any => {
-	return getDataForKey(props.componentData || {}, path);
-};
-
 const getDynamicContent = () => {
-	let innerHTML = null as string | null;
-
-	if (props.block.getDataKey("property") === "innerHTML") {
-		let value;
-		if (props.block.getDataKey("comesFrom") === "props") {
-			value = getPropValue(
-				props.block.getDataKey("key"),
-				props.block,
-				getDataScriptValue,
-				props.defaultProps,
-				getComponentDataValue,
-			);
-		} else if (props.block.getDataKey("comesFrom") === "componentData") {
-			value = getComponentDataValue(props.block.getDataKey("key"));
-		} else {
-			value = getDataScriptValue(props.block.getDataKey("key"));
-		}
-		innerHTML = value ?? innerHTML;
-	}
-	props.block
-		.getDynamicValues()
-		?.filter((dataKeyObj: BlockDataKey) => {
-			return dataKeyObj.property === "innerHTML" && dataKeyObj.type === "key";
-		})
-		?.forEach((dataKeyObj: BlockDataKey) => {
-			let value;
-			if (dataKeyObj.comesFrom === "props") {
-				value = getPropValue(
-					dataKeyObj.key as string,
-					props.block,
-					getDataScriptValue,
-					props.defaultProps,
-					getComponentDataValue,
-				);
-			} else if (dataKeyObj.comesFrom === "componentData") {
-				value = getComponentDataValue(dataKeyObj.key as string);
-			} else {
-				value = getDataScriptValue(dataKeyObj.key as string);
-			}
-			innerHTML = value ?? innerHTML;
-		});
-	return innerHTML;
+	return valueResolver.applyDynamicValues("key", { innerHTML: null }).innerHTML;
 };
 
 const isEditable = computed(() => {
@@ -252,6 +204,13 @@ const getInnerHTML = (editor: Editor | null) => {
 		)
 	) {
 		innerHTML = editor?.getText();
+	}
+	// a lone attribute-less <p> wrapper is redundant inside the block's own tag
+	// (and a block box inside inline elements like span/a breaks their layout)
+	const doc = editor.state.doc;
+	const wrapped = innerHTML.match(/^<p>([\s\S]*)<\/p>$/);
+	if (doc.childCount === 1 && doc.firstChild?.type.name === "paragraph" && wrapped) {
+		innerHTML = wrapped[1];
 	}
 	return innerHTML;
 };
@@ -363,6 +322,19 @@ defineExpose({
 });
 </script>
 <style scoped>
+/* no box — a block box inside inline tags (span/a) fragments their background/radius */
+.__text_content__ {
+	display: contents;
+}
+
+/* the contenteditable editor root needs a box, so keep it inline-level inside inline tags */
+:is(span, a, b, i, em, strong, cite, label).__text_block__ > .__text_editor__ {
+	display: inline-block;
+}
+:is(span, a, b, i, em, strong, cite, label).__text_block__ :deep(.ProseMirror p) {
+	display: inline;
+}
+
 .__text_block__ :deep([contenteditable="true"]) {
 	caret-color: currentcolor;
 	/* blocks inherit `select-none`; re-enable native text selection while editing */

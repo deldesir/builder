@@ -19,6 +19,7 @@ def get_context(context):
 	# developer mode
 	context.is_developer_mode = frappe.conf.developer_mode
 	context.is_fc_site = is_fc_site()
+	context.is_read_only_mode = bool(frappe.flags.read_only)
 	if frappe.session.user == "Guest":
 		frappe.local.flags.redirect_location = abs_url("/login")
 		raise frappe.Redirect
