@@ -23,7 +23,6 @@
 			@mouseup="selectionTriggered = false"
 			v-if="editor && showEditor"
 			class="__text_editor__ bg-clip-[inherit] relative bg-inherit [-webkit-background-clip:inherit] [background-image:inherit]"
-			:style="block.getRawStyles()"
 			@keydown="(e: KeyboardEvent) => bubbleMenu?.handleKeydown(e)" />
 		<slot />
 	</component>
@@ -41,6 +40,7 @@ import { Color } from "@tiptap/extension-color";
 import { FontFamily } from "@tiptap/extension-font-family";
 import { TextStyle } from "@tiptap/extension-text-style";
 import { Underline } from "@tiptap/extension-underline";
+import { Selection } from "@tiptap/extensions";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { StarterKit } from "@tiptap/starter-kit";
 import { Editor, EditorContent, Extension } from "@tiptap/vue-3";
@@ -215,6 +215,16 @@ const getInnerHTML = (editor: Editor | null) => {
 	return innerHTML;
 };
 
+const destroyEditor = () => {
+	if (!editor.value) return;
+	// a newer editor may already own the slot; clear only if it's still ours
+	if (props.block.getEditor() === editor.value) {
+		props.block.setEditor(null);
+	}
+	editor.value.destroy();
+	editor.value = null;
+};
+
 if (!props.preview) {
 	watch(
 		() => [
@@ -228,6 +238,9 @@ if (!props.preview) {
 				canvasStore.activeCanvas?.activeBreakpoint === props.breakpoint &&
 				!blockController.multipleBlocksSelected()
 			) {
+				// undo/redo swaps the Block under a reused component, so a live
+				// editor may still exist here; destroy it or it leaks
+				destroyEditor();
 				editor.value = new Editor({
 					content: textContent.value,
 					extensions: [
@@ -261,6 +274,8 @@ if (!props.preview) {
 						FontFamily,
 						FontFamilyPasteRule,
 						Underline,
+						// keeps the selection visible when focus moves to menu controls
+						Selection,
 					],
 					enablePasteRules: false,
 					onUpdate({ editor }) {
@@ -277,22 +292,16 @@ if (!props.preview) {
 					injectCSS: false,
 				});
 
-				// @ts-ignore
-				props.block.__proto__.editor = editor.value;
+				props.block.setEditor(editor.value);
 				editor.value?.setEditable(isEditable.value);
 			} else {
-				editor.value?.destroy();
-				editor.value = null;
-				// @ts-ignore
-				props.block.__proto__.editor = null;
+				destroyEditor();
 			}
 		},
 		{ immediate: true },
 	);
 
-	onBeforeUnmount(() => {
-		editor.value?.destroy();
-	});
+	onBeforeUnmount(destroyEditor);
 }
 
 const handleClick = (e: MouseEvent) => {
@@ -312,7 +321,10 @@ const handleEscKey = () => {
 };
 
 const handleClickOutside = (e: MouseEvent) => {
-	if ((e.target as HTMLElement).closest(".canvas-container")) {
+	const target = e.target as HTMLElement;
+	// #overlay holds builder chrome (bubble menu). Using it is not leaving the block.
+	if (target.closest("#overlay")) return;
+	if (target.closest(".canvas-container")) {
 		canvasStore.editableBlock = null;
 	}
 };
@@ -333,6 +345,20 @@ defineExpose({
 }
 :is(span, a, b, i, em, strong, cite, label).__text_block__ :deep(.ProseMirror p) {
 	display: inline;
+}
+
+/* the native highlight is hidden while unfocused; matches index.html's selection color */
+.__text_block__ :deep(.ProseMirror:not(.ProseMirror-focused) .selection) {
+	background-color: theme("colors.gray.500 / 30%");
+	/* an inline background covers ~1.25em, not the line box; padding overflows, so nothing shifts */
+	padding-block: calc((1lh - 1.25em) / 2);
+	box-decoration-break: clone;
+	-webkit-box-decoration-break: clone;
+}
+
+/* the extension injects this only when injectCSS is on; without it Safari/Firefox double up */
+.__text_block__ :deep(.ProseMirror:not(.ProseMirror-focused) *::selection) {
+	background: transparent;
 }
 
 .__text_block__ :deep([contenteditable="true"]) {
