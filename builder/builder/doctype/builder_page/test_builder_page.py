@@ -126,6 +126,24 @@ class TestBuilderPage(FrappeTestCase):
 		getdoc("Builder Page", self.page.name)
 		self.assertEqual(frappe.response.docs[0].get("__onload").get("builder_path"), "builder")
 
+	def test_blocks_can_be_saved_as_a_list(self):
+		"""Callers that hand over a block tree (paste, AI writes, the API) pass a list.
+		Only insert used to compact it, so updating a page threw "cannot be a list"."""
+		page = frappe.get_doc(
+			{
+				"doctype": "Builder Page",
+				"page_title": "List Blocks",
+				"blocks": [{"element": "div", "originalElement": "body", "blockId": "root"}],
+			}
+		).insert()
+		self.assertIsInstance(page.blocks, str)
+
+		page.blocks = [{"element": "section", "blockId": "updated"}]
+		page.save()
+		self.assertIsInstance(page.reload().blocks, str)
+		self.assertIn("section", page.blocks)
+		page.delete()
+
 	def test_dynamic_route(self):
 		from frappe.utils import get_html_for_route
 
@@ -285,6 +303,66 @@ class TestBuilderPage(FrappeTestCase):
 			self.assertTrue("Item 2" in get_html_for(content, "tag", "h2", index=1))
 			self.assertTrue("$20" in get_html_for(content, "tag", "span", index=1))
 
+		finally:
+			page.delete()
+
+	def test_repeater_with_malformed_data_key_renders_empty(self):
+		# A corrupt dataKey.key (e.g. an array stringified to "[object Object],...") must
+		# not crash the page render with an invalid-Jinja error — the repeater should just
+		# render no rows.
+		body = Block(element="div", originalElement="body")
+		repeater_block = Block(element="div", isRepeaterBlock=True)
+		item_name = Block(element="h2")
+
+		repeater_block.attach_data_key("[object Object],[object Object]", "innerHTML")
+		item_name.set_dynamic_value("name", "key", "innerHTML")
+
+		repeater_block.attach_children(item_name)
+		body.attach_children(repeater_block)
+
+		page = frappe.get_doc(
+			{
+				"doctype": "Builder Page",
+				"page_title": "Malformed Repeater Test",
+				"published": 1,
+				"route": "/malformed-repeater-test",
+				"blocks": body.as_json(wrap_in_array=True),
+			}
+		).insert()
+
+		try:
+			content = get_response_content("/malformed-repeater-test")
+			self.assertIn("Malformed Repeater Test", content)  # page rendered, no 500
+			self.assertNotIn("[object Object]", content)
+			self.assertNotIn("key_invalid", content)
+		finally:
+			page.delete()
+
+	def test_repeater_block_with_empty_data_key(self):
+		"""A repeater with an empty data key must render as a plain container.
+		An empty key compiles to `{% for key_ in ( or {}) %}`, a Jinja syntax
+		error that 417s the whole page."""
+		body = Block(element="div", originalElement="body")
+		repeater_block = Block(element="div", isRepeaterBlock=True)
+		heading = Block(element="h2", innerHTML="Static child")
+
+		repeater_block.attach_data_key("", "dataKey")
+		repeater_block.attach_children(heading)
+		body.attach_children(repeater_block)
+
+		page = frappe.get_doc(
+			{
+				"doctype": "Builder Page",
+				"page_title": "Empty Repeater Test",
+				"published": 1,
+				"route": "/empty-repeater-test",
+				"blocks": body.as_json(wrap_in_array=True),
+			}
+		).insert()
+
+		try:
+			content = get_response_content("/empty-repeater-test")
+			self.assertTrue("Static child" in get_html_for(content, "tag", "h2"))
 		finally:
 			page.delete()
 
@@ -1559,6 +1637,65 @@ component.update({
 		self.assertIn("color: red", css_unset)
 		self.assertNotIn("display:", css_unset)
 		self.assertNotIn("None", css_unset)
+
+	def test_renders_legacy_raw_styles_from_base_styles(self):
+		from builder.builder.doctype.builder_page.builder_page import get_block_html
+
+		blocks = [
+			{
+				"blockId": "legacy",
+				"element": "button",
+				"baseStyles": {"background": "red"},
+				"rawStyles": {"background": "blue", "hover:background-color": "black"},
+				"children": [],
+			}
+		]
+
+		_, css, _, _ = get_block_html(blocks)
+
+		self.assertIn("background: blue", css)
+		self.assertIn(":hover", css)
+		self.assertIn("background-color: black", css)
+		self.assertNotIn("background: red", css)
+
+	def test_renders_legacy_raw_styles_from_component(self):
+		from builder.builder.doctype.builder_page.builder_page import get_block_html
+
+		component_root = {
+			"blockId": "comp-root",
+			"element": "div",
+			"rawStyles": {"text-overflow": "ellipsis"},
+			"children": [{"blockId": "comp-child", "element": "span", "rawStyles": {"flex-shrink": "0"}}],
+		}
+		component = frappe.get_doc(
+			{"doctype": "Builder Component", "block": frappe.as_json(component_root)}
+		).insert()
+
+		blocks = [
+			{
+				"blockId": "instance",
+				"extendedFromComponent": component.name,
+				"children": [{"blockId": "comp-child", "isChildOfComponent": component.name}],
+			}
+		]
+
+		try:
+			_, css, _, _ = get_block_html(blocks)
+			self.assertIn("text-overflow: ellipsis", css)
+			self.assertIn("flex-shrink: 0", css)
+		finally:
+			component.delete()
+
+	def test_renders_blocks_with_only_responsive_styles(self):
+		from builder.builder.doctype.builder_page.builder_page import get_block_html
+
+		blocks = [{"blockId": "mobile-only", "element": "div", "mobileStyles": {"textOverflow": "ellipsis"}}]
+
+		html, css, _, _ = get_block_html(blocks)
+
+		self.assertIn("fb-", html)
+		self.assertIn("@media only screen and (max-width: 576px)", css)
+		self.assertIn("text-overflow: ellipsis", css)
 
 	def test_conflicting_routes_picks_last_published(self):
 		"""Pages sharing a route should resolve to the most recently published one."""
