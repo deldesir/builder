@@ -70,7 +70,7 @@
 							<SparklesIcon class="bob-orb-spark relative z-10 size-7 text-ink-gray-8" />
 						</span>
 						<p class="text-sm font-medium text-ink-gray-8">
-							{{ pageHasContent ? "Describe a change" : "Describe your site" }}
+							{{ pageHasContent ? "What should we change?" : "Tell me what you're building" }}
 						</p>
 						<p class="text-p-xs text-ink-gray-5">Try one of these, or type your own below</p>
 					</div>
@@ -120,9 +120,13 @@
 							     line covers only what the timeline can't — the answer already
 							     streaming (it sits below the reply as the turn's status, never the
 							     reply shimmering while it's read) or no steps yet. -->
+							<!-- mt-1 only under a streamed reply: standing alone it must sit exactly
+							     where the timeline's first row lands, or the label jumps 4px the
+							     moment "Working" becomes "Thinking". -->
 							<div
 								v-if="stillWorking(message) && (!!assistantText(message) || !message.metadata?.steps?.length)"
-								class="animate-shine mt-1 w-fit text-p-xs">
+								class="animate-shine w-fit text-p-xs text-ink-gray-5"
+								:class="assistantText(message) && 'mt-1'">
 								Working
 							</div>
 						</template>
@@ -328,9 +332,9 @@
 						ref="promptInput"
 						v-model="prompt"
 						rows="1"
-						class="no-scrollbar block max-h-60 min-h-20 w-full resize-none rounded border border-[--surface-gray-2] bg-surface-gray-2 px-2 py-1.5 text-sm text-ink-gray-8 placeholder-ink-gray-4 transition-colors hover:border-outline-gray-3 hover:bg-surface-gray-3 focus:border-outline-gray-4 focus:bg-surface-base focus:shadow-sm focus:ring-0 focus-visible:ring-2 focus-visible:ring-outline-gray-3 disabled:cursor-not-allowed disabled:bg-surface-gray-1 disabled:text-ink-gray-5"
+						class="no-scrollbar block max-h-60 min-h-20 w-full resize-none rounded border border-[--surface-gray-2] bg-surface-gray-2 px-2 py-1.5 text-p-sm text-ink-gray-8 placeholder-ink-gray-4 transition-colors hover:border-outline-gray-3 hover:bg-surface-gray-3 focus:border-outline-gray-4 focus:bg-surface-base focus:shadow-sm focus:ring-0 focus-visible:ring-2 focus-visible:ring-outline-gray-3 disabled:cursor-not-allowed disabled:bg-surface-gray-1 disabled:text-ink-gray-5"
 						:disabled="isSubmitting"
-						placeholder="Ask to create or edit this page..."
+						placeholder="Ask to create or edit this page…"
 						@keydown.meta.enter="submitPrompt"
 						@keydown.ctrl.enter="submitPrompt" />
 					<Transition name="fade">
@@ -709,12 +713,10 @@ function openDebug(debug: Record<string, any>) {
 function debugHasSignal(debug: Record<string, any>): boolean {
 	if (!debug) return false;
 	return Boolean(
-		debug.noopCorrected ||
-			(debug.argsRepaired ?? 0) > 0 ||
+		(debug.argsRepaired ?? 0) > 0 ||
 			(debug.toolFailures?.length ?? 0) > 0 ||
 			(debug.finishReasons || []).includes("length") ||
-			debug.stopReason === "max_rounds" ||
-			debug.stopReason === "noop_unbacked",
+			debug.stopReason === "max_rounds",
 	);
 }
 
