@@ -3,6 +3,7 @@ import useCanvasStore from "@/stores/canvasStore";
 import { __ } from "@/translation";
 import { BuilderPage } from "@/types/doctypes";
 import getBlockTemplate from "@/utils/blockTemplate";
+import { editorDemo } from "@/utils/editorDemo";
 import { dialog, FileUploadHandler, toast, type DialogSize, type DialogTheme } from "frappe-ui";
 import { reactive, toRaw } from "vue";
 import { getRGB, HexToHSV, HSVToHex } from "./colors";
@@ -354,6 +355,10 @@ function getRouteVariables(route: string) {
 }
 
 async function uploadBuilderAsset(file: File, silent = false) {
+	if (editorDemo) {
+		// the demo has no server to upload to, so the image lives only in this tab
+		return { fileURL: URL.createObjectURL(file), fileName: file.name };
+	}
 	const uploader = new FileUploadHandler();
 	let fileDoc = {
 		file_url: "",
@@ -627,6 +632,15 @@ function getBlock(e: MouseEvent) {
 	const canvasStore = useCanvasStore();
 	const blockInfo = getBlockInfo(e);
 	return canvasStore.activeCanvas?.findBlock(blockInfo.blockId);
+}
+
+// offsetLeft and offsetTop reach the border edge, but left and top place the margin edge
+function getRenderedPosition(element: HTMLElement) {
+	const style = getComputedStyle(element);
+	return {
+		left: element.offsetLeft - getNumberFromPx(style.marginLeft),
+		top: element.offsetTop - getNumberFromPx(style.marginTop),
+	};
 }
 
 function getRootBlockTemplate() {
@@ -961,6 +975,15 @@ function getPageUsageMessage(count: number) {
 	return count === 1 ? __("used in 1 page") : __("used in {0} pages", [count]);
 }
 
+// frappe-ui puts the server's text in `messages`; `message` is just "<url> <exc_type>"
+function getErrorMessage(error: unknown, fallback = __("Something went wrong")): string {
+	if (typeof error !== "object" || !error) return fallback;
+	const first = "messages" in error && Array.isArray(error.messages) ? error.messages[0] : null;
+	const text = typeof first === "string" ? first.replace(/<[^>]*>/g, "").trim() : "";
+	if (text) return text;
+	return ("message" in error && typeof error.message === "string" && error.message) || fallback;
+}
+
 function parseJSONWithFallback<T>(value: T | string | undefined, fallback: T): T {
 	if (value === undefined || value === null || value === "") {
 		return fallback;
@@ -1003,11 +1026,13 @@ export {
 	getDataArray,
 	getDataForKey,
 	getDefaultPropsList,
+	getErrorMessage,
 	getImageBlock,
 	getNumberFromPx,
 	getPageUsageMessage,
 	getParentProps,
 	getPropValue,
+	getRenderedPosition,
 	getRepeaterScopedData,
 	getRGB,
 	getRootBlockTemplate,

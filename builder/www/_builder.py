@@ -4,25 +4,33 @@ from frappe.pulse.utils import get_app_version
 from frappe.translate import get_translations_from_apps, get_user_translations
 from frappe.utils.telemetry import capture
 
+from builder.editor_demo import EditorDemo
 from builder.hooks import builder_path
 
 no_cache = 1
 
 
 def get_context(context):
+	context.builder_path = builder_path
+	context.boot = get_boot()
+	if demo := EditorDemo.from_app_path(frappe.form_dict.app_path):
+		# no csrf token or session details: the demo must stay inert for signed-in visitors too
+		demo.set_context(context)
+		return
+
 	csrf_token = frappe.sessions.get_csrf_token()
 	frappe.db.commit()
 	context.csrf_token = csrf_token
 	context.site_name = frappe.local.site
-	from builder.utils import abs_url
-	context.builder_path = builder_path
 	context.builder_version = get_app_version("builder")
 	# developer mode
 	context.is_developer_mode = frappe.conf.developer_mode
 	context.is_fc_site = is_fc_site()
 	context.is_read_only_mode = bool(frappe.flags.read_only)
-	context.boot = get_boot()
 	if frappe.session.user == "Guest":
+		from builder.utils import abs_url
+
+		# send guests to the login page under the configured URL prefix
 		frappe.local.flags.redirect_location = abs_url("/login")
 		raise frappe.Redirect
 	else:
