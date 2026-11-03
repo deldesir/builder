@@ -1,13 +1,15 @@
 import { createRegistry, type RegistryItem } from "@/utils/createRegistry";
 import { defineAsyncComponent, type Component } from "vue";
 import { __ } from "@/translation";
+import { isCloudBillingAvailable } from "@/composables/useCloudBilling";
 
 export type SettingsGroup = "Current Page" | "Global";
 
 export type SettingsItem = RegistryItem & {
 	label: string;
 	title: string;
-	icon: string;
+	/** a lucide class name, or a component, such as a plugin's `lucideIcon()` */
+	icon: string | Component;
 	group: SettingsGroup;
 	component: Component;
 	disabled?: boolean;
@@ -15,6 +17,8 @@ export type SettingsItem = RegistryItem & {
 	load?: () => Promise<unknown>;
 	/** false keeps a heavy pane out of the idle prefetch: it loads on first open */
 	preload?: boolean;
+	/** the pane brings its own title and padding, as the Cloud billing panel does */
+	bare?: boolean;
 };
 
 /** a pane declares the loader once: register builds the component from it */
@@ -116,6 +120,16 @@ const panes: SettingsPane[] = [
 		condition: () => window.is_fc_site === "True",
 	},
 	{
+		name: "global_billing",
+		label: __("Billing"),
+		title: __("Billing"),
+		icon: "lucide-credit-card",
+		group: "Global",
+		load: () => import("@/components/Settings/GlobalBilling.vue"),
+		condition: () => isCloudBillingAvailable.value,
+		bare: true,
+	},
+	{
 		name: "global_analytics",
 		label: __("Analytics"),
 		title: __("Site Analytics"),
@@ -139,6 +153,14 @@ const panes: SettingsPane[] = [
 		icon: "lucide-bot",
 		group: "Global",
 		load: () => import("@/components/Settings/GlobalAgents.vue"),
+	},
+	{
+		name: "global_plugins",
+		label: __("Plugins"),
+		title: __("Plugins Settings"),
+		icon: "lucide-plug",
+		group: "Global",
+		load: () => import("@/components/Settings/GlobalPlugins.vue"),
 	},
 ];
 

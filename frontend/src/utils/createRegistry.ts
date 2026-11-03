@@ -18,12 +18,32 @@ function withRawComponents<T extends object>(item: T): T {
 	return item;
 }
 
+/** The plugin whose install() is running, and the unregisters of what each plugin registered. */
+let installingPlugin: string | null = null;
+const pluginItems = new Map<string, Array<() => void>>();
+
+/** Runs a plugin's install(), noting what it registers so `unregisterPluginItems` can take it back. */
+export function trackPluginItems(plugin: string, install: () => void) {
+	installingPlugin = plugin;
+	try {
+		install();
+	} finally {
+		installingPlugin = null;
+	}
+}
+
+/** Before a new version of a running plugin installs, so a renamed item does not stay behind. */
+export function unregisterPluginItems(plugin: string) {
+	pluginItems.get(plugin)?.forEach((unregister) => unregister());
+	pluginItems.delete(plugin);
+}
+
 /**
  * Every registry item needs a stable identity, and may ask for a position
  * relative to another item's name.
  *
  * An unknown `before` name puts the item first, an unknown `after` name puts it
- * last, so an extension that anchors to a feature this site does not have still
+ * last, so a plugin that anchors to a feature this site does not have still
  * lands somewhere sensible.
  */
 export type RegistryEntry = {
@@ -38,7 +58,7 @@ export type RegistryItem = RegistryEntry & {
 };
 
 /**
- * A registry backs one editor surface. Built-in features and, later, extensions
+ * A registry backs one editor surface. Built-in features and, later, plugins
  * register through the same function.
  *
  * Leave `before` and `after` unset in the common case: items then display in
@@ -83,9 +103,12 @@ export function createRegistry<T extends RegistryEntry>() {
 		items.set(item.name, registered);
 		place(registered);
 		// a later registration under the same name owns the entry, so this must not delete it
-		return () => {
+		const unregister = () => {
 			if (toRaw(items.get(item.name)) === registered) remove(item.name);
 		};
+		if (installingPlugin)
+			pluginItems.set(installingPlugin, [...(pluginItems.get(installingPlugin) ?? []), unregister]);
+		return unregister;
 	};
 
 	const all = computed(() => order.value.map((name) => items.get(name) as T));
