@@ -292,6 +292,18 @@ class TestBuilderPage(FrappeTestCase):
 		finally:
 			page.delete()
 
+	def test_a_templated_canonical_url_is_rendered(self):
+		from frappe.utils import get_url
+
+		page = insert_page("test-templated-canonical", "Canonical Content")
+		try:
+			page.publish()
+			page.db_set("canonical_url", "{{ frappe.utils.get_url() }}/canonical-target")
+			content = get_response_content("/test-templated-canonical")
+			self.assertIn(f'<link rel="canonical" href="{get_url()}/canonical-target" />', content)
+		finally:
+			page.delete()
+
 	def test_route_is_trimmed_of_whitespace(self):
 		padded, blank = pages = [
 			insert_page(route, "Whitespace Content") for route in (" test-route-whitespace / ", "   ")
@@ -326,6 +338,18 @@ class TestBuilderPage(FrappeTestCase):
 			self.assertFalse(page.staging)
 			self.assertEqual(get_response("/test-staging-unpublish").status_code, 404)
 		finally:
+			page.delete()
+
+	def test_unpublishing_the_home_page_clears_it_from_settings(self):
+		page = insert_page("test-unpublish-home", "Home Content")
+		home_page = frappe.db.get_single_value("Builder Settings", "home_page")
+		try:
+			page.publish()
+			frappe.db.set_single_value("Builder Settings", "home_page", page.route)
+			page.unpublish()
+			self.assertFalse(frappe.db.get_single_value("Builder Settings", "home_page"))
+		finally:
+			frappe.db.set_single_value("Builder Settings", "home_page", home_page)
 			page.delete()
 
 	def test_live_page_keeps_its_route_when_a_staging_page_shares_it(self):
@@ -409,6 +433,28 @@ class TestBuilderPage(FrappeTestCase):
 			self.assertIn('"at": "2026-01-02 03:04:05"', content)
 			self.assertIn('"on": "2026-01-02"', content)
 			self.assertIn('"price": 9.5', content)
+		finally:
+			page.delete()
+
+	def test_app_hooks_feed_page_data_under_the_app_name(self):
+		page = insert_page("test-page-data-hook", "Hook")
+		page.page_data_script = 'data.builder["title"] = "from script"'
+		page.save()
+		get_hooks = frappe.get_hooks
+
+		def hooks(hook, *args, **kwargs):
+			if hook == "builder_page_data":
+				return [f"{__name__}.get_app_page_data"] if kwargs.get("app_name") == "builder" else []
+			return get_hooks(hook, *args, **kwargs)
+
+		try:
+			with patch("frappe.get_hooks", side_effect=hooks):
+				data = page.get_page_data()
+			self.assertEqual(data.builder["page_id"], page.name)
+			self.assertEqual(data.builder["title"], "from script")
+			self.assertNotIn("page_id", data)
+			# the editor fetches it with run_doc_method
+			page.is_whitelisted("get_page_data")
 		finally:
 			page.delete()
 
@@ -2391,3 +2437,7 @@ def get_html_for(html, type, value, index=None, only_content=False, list_all=Fal
 			results[index] if index is not None and index < len(results) else results[0] if results else None
 		)
 		return result.get(value) if result and result.get(value) else ""
+
+
+def get_app_page_data(page):
+	return {"page_id": page.name, "title": "from app"}

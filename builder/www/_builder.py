@@ -3,6 +3,7 @@ from frappe.integrations.frappe_providers.frappecloud_billing import is_fc_site
 from frappe.pulse.utils import get_app_version
 from frappe.translate import get_translations_from_apps, get_user_translations
 from frappe.utils.telemetry import capture
+from frappe.utils.telemetry.pulse.client import is_enabled as is_telemetry_enabled
 
 from builder.editor_demo import EditorDemo
 from builder.utils import get_builder_path
@@ -19,7 +20,7 @@ def get_context(context):
 		return
 
 	csrf_token = frappe.sessions.get_csrf_token()
-	frappe.db.commit()
+	frappe.db.commit()  # nosemgrep
 	context.csrf_token = csrf_token
 	context.site_name = frappe.local.site
 	if frappe._dev_server:
@@ -45,8 +46,13 @@ def get_boot() -> dict:
 	lang = frappe.local.lang
 	messages = get_translations_from_apps(lang, ["builder"])
 	messages.update(get_user_translations(lang) or {})
-	# the trial card opens Cloud Settings with this context, so the SDK skips its own lookup
-	return {"translated_messages": messages, "cloud_settings": get_cloud_settings()}
+	return {
+		"translated_messages": messages,
+		# the trial card opens Cloud Settings with this context, so the SDK skips its own lookup
+		"cloud_settings": get_cloud_settings(),
+		# content blockers stop the Pulse client, so onboarding reads the server's verdict instead
+		"telemetry_enabled": is_telemetry_enabled(),
+	}
 
 
 def get_cloud_settings() -> dict:
