@@ -13,6 +13,7 @@ RECENT_SESSION_SCAN = 20
 class AISession:
 	DOCTYPE = "Builder AI Session"
 	MESSAGE_DOCTYPE = "Builder AI Message"
+	PAGE_DOCTYPE = "Builder AI Session Page"
 	CONTEXT_WINDOW = 10  # how many prior turns to feed back to the model
 	IMAGE_REPLAY_LIMIT = 2  # newest attached images re-shown to a vision model
 
@@ -46,6 +47,22 @@ class AISession:
 		return next((name for name in recent if name in spoken), recent[0])
 
 	@classmethod
+	def on_page(cls, page_id: str, user: str | None = None) -> dict:
+		"""Filters for a user's chats on a page: one is on every page it was used on
+		or changed, not only the one it started on."""
+		user = user or frappe.session.user
+		listed = frappe.get_all(
+			cls.PAGE_DOCTYPE, {"page": page_id, "parenttype": cls.DOCTYPE}, pluck="parent"
+		)
+		started = frappe.get_all(cls.DOCTYPE, {"page": page_id, "session_user": user}, pluck="name")
+		return {"name": ["in", list({*listed, *started}) or [""]], "session_user": user}
+
+	@classmethod
+	def can_open(cls, session_id: str, page_id: str) -> bool:
+		doc = frappe.db.exists(cls.DOCTYPE, session_id) and frappe.get_doc(cls.DOCTYPE, session_id)
+		return bool(doc) and doc.session_user == frappe.session.user and cls(doc).touches(page_id)
+
+	@classmethod
 	def create(cls, values: dict, model: str | None = None):
 		"""Insert a fresh Active session. A chat gets one with its first message."""
 		doc = frappe.get_doc(
@@ -68,9 +85,10 @@ class AISession:
 		doc = frappe.get_doc(cls.DOCTYPE, session_id)
 		if doc.session_user != user:
 			frappe.throw(_("You do not have access to this AI session"))
-		if page_id and doc.page != page_id:
+		session = cls(doc)
+		if page_id and not session.touches(page_id):
 			frappe.throw(_("AI session does not belong to this page"))
-		return cls(doc)
+		return session
 
 	@classmethod
 	def try_append_message(cls, session_id: str | None, role: str, content: str, **kwargs) -> str | None:
@@ -96,6 +114,27 @@ class AISession:
 	def page(self):
 		return self._doc.page
 
+	def touches(self, page_id: str) -> bool:
+		return self._doc.page == page_id or self.lists(page_id)
+
+	def lists(self, page_id: str) -> bool:
+		return any(row.page == page_id for row in self._doc.pages)
+
+	def add_pages(self, *page_ids: str) -> None:
+		"""Record pages this chat changed or was used on, so each of them lists it."""
+		for page_id in dict.fromkeys(page for page in page_ids if page):
+			if not self.lists(page_id):
+				self._doc.append("pages", {"page": page_id}).db_insert()
+
+	def move_to(self, page_id: str) -> None:
+		"""The chat goes on from another page: it lives there now, and both pages list it.
+		Its page is where the server's own turns (a build, a resume) report back."""
+		if not page_id or self._doc.page == page_id:
+			return
+		self.add_pages(self._doc.page, page_id)
+		self._doc.page = page_id
+		frappe.db.set_value(self.DOCTYPE, self._doc.name, "page", page_id, update_modified=False)
+
 	@property
 	def selected_model(self):
 		return self._doc.selected_model
@@ -116,15 +155,29 @@ class AISession:
 		return meta if isinstance(meta, dict) else {}
 
 	@classmethod
-	def latest_canvas_theme(cls, session_id: str) -> str | None:
-		"""The editor theme the user's latest message was sent from."""
+	def plugins_written(cls, session_id: str | None) -> list[str]:
+		"""Every plugin this conversation's replies wrote, oldest first."""
+		if not session_id:
+			return []
+		rows = frappe.db.get_all(
+			cls.MESSAGE_DOCTYPE,
+			filters={"session": session_id, "role": "assistant", "metadata_json": ["like", '%"plugins"%']},
+			pluck="metadata_json",
+			order_by="creation asc",
+		)
+		written = [plugin for row in rows for plugin in cls.load_metadata(row).get("plugins") or []]
+		return list(dict.fromkeys(written))
+
+	@classmethod
+	def latest_turn_metadata(cls, session_id: str) -> dict:
+		"""What the user's latest message was sent with: editor theme, thinking effort."""
 		metadata_json = frappe.db.get_value(
 			cls.MESSAGE_DOCTYPE,
 			{"session": session_id, "role": "user"},
 			"metadata_json",
 			order_by="creation desc",
 		)
-		return cls.load_metadata(metadata_json).get("canvasTheme")
+		return cls.load_metadata(metadata_json)
 
 	@staticmethod
 	def row_to_message(row: dict) -> dict:
@@ -208,6 +261,10 @@ class AISession:
 			# generator see what was proposed and approved.
 			if role == "assistant" and r.get("status") == "plan_summary":
 				content = self.plan_context_content(content, r.get("metadata_json"))
+			if role == "assistant":
+				content = self.sources_context_content(content, r.get("metadata_json"))
+			if role == "user":
+				content = self.sent_from(content, r.get("metadata_json"))
 			if i in replay_images and (image := self.replay_image_part(r)):
 				out.append({"role": role, "content": [{"type": "text", "text": content}, image]})
 				continue
@@ -242,6 +299,13 @@ class AISession:
 				return {"type": "image_url", "image_url": {"url": data_url}}
 		return None
 
+	def sent_from(self, content: str, metadata_json: str | None) -> str:
+		"""A message sent from another page says so: its "this page" meant that one."""
+		page = self.load_metadata(metadata_json).get("page") or {}
+		if not page.get("page_id") or page["page_id"] == self._doc.page:
+			return content
+		return f"[Sent from the page '{page.get('title')}' ({page.get('route')}), id {page['page_id']}]\n{content}"
+
 	@staticmethod
 	def plan_context_content(headline: str, metadata_json: str | None) -> str:
 		"""Reconstruct a proposed plan's full text (headline + sections + palette)
@@ -256,6 +320,18 @@ class AISession:
 		if palette:
 			lines.append(f"Palette: {palette}")
 		return "\n".join(lines)
+
+	@staticmethod
+	def sources_context_content(reply: str, metadata_json: str | None) -> str:
+		"""The reply plus the addresses its turn read. Only the reply is stored as content,
+		so without them a follow-up ("now add the rest") guesses at URLs again."""
+		sources = AISession.load_metadata(metadata_json).get("sources") or []
+		reads = [
+			s["url"] + (f" fields={','.join(s['fields'])}" if s.get("fields") else "")
+			for s in sources
+			if s.get("url")
+		]
+		return f"{reply}\n\n[read_url answered: {'; '.join(reads)}]" if reads else reply
 
 	# --- message write ----------------------------------------------------
 
@@ -299,12 +375,22 @@ class AISession:
 		frappe.db.set_value(self.DOCTYPE, self._doc.name, updates, update_modified=False)
 		return msg.name
 
+	@classmethod
+	def answer_card(cls, message_id: str, status: str, metadata: dict) -> None:
+		"""Close a confirm card, keeping how it came out on the card itself."""
+		frappe.db.set_value(
+			cls.MESSAGE_DOCTYPE,
+			message_id,
+			{"status": status, "metadata_json": json.dumps(metadata, separators=(",", ":"))},
+		)
+
 	def update_last_assistant_metadata(self, extra_metadata: dict):
 		"""Merge extra_metadata into the most recent assistant message's
-		metadata_json. One-row UPDATE — no read-modify-write of a giant blob."""
+		metadata_json. One-row UPDATE, no read-modify-write of a giant blob.
+		A confirm card the turn left after its reply is not that message."""
 		row = frappe.db.get_value(
 			self.MESSAGE_DOCTYPE,
-			{"session": self._doc.name, "role": "assistant"},
+			{"session": self._doc.name, "role": "assistant", "status": ("!=", "pending_action")},
 			["name", "metadata_json"],
 			order_by="creation desc",
 			as_dict=True,
@@ -327,10 +413,10 @@ class AISession:
 	# instead of bricking the session until someone edits the row.
 
 	@staticmethod
-	def start_run(session_id: str) -> str | None:
+	def start_run(session_id: str, ttl: int = locks.SESSION_LOCK_TTL) -> str | None:
 		"""Try to claim this session's turn slot. Returns the release token, or None
 		when another turn is still running."""
-		return locks.acquire(locks.session_key(session_id), locks.SESSION_LOCK_TTL)
+		return locks.acquire(locks.session_key(session_id), ttl)
 
 	@staticmethod
 	def end_run(session_id: str, token: str | None) -> None:
@@ -339,6 +425,49 @@ class AISession:
 	@classmethod
 	def is_session_running(cls, session_id: str) -> bool:
 		return bool(session_id) and locks.held(locks.session_key(session_id))
+
+	# --- notes (what the user sends while a turn runs) ---------------------
+
+	@staticmethod
+	def notes_key(session_id: str) -> str:
+		return f"builder_ai_notes:{session_id}"
+
+	@classmethod
+	def queue_note(cls, session_id: str, text: str) -> None:
+		frappe.cache.rpush(cls.notes_key(session_id), text)
+
+	@classmethod
+	def pop_notes(cls, session_id: str | None) -> list[str]:
+		"""Queued notes, oldest first. Popped one by one, so a note sent mid-drain
+		waits for the next round instead of being lost."""
+		if not session_id:
+			return []
+		frappe.cache.delete_value(cls.notes_now_key(session_id))
+		notes = []
+		while note := frappe.cache.lpop(cls.notes_key(session_id)):
+			notes.append(note.decode())
+		return notes
+
+	@classmethod
+	def clear_notes(cls, session_id: str | None) -> None:
+		if session_id:
+			frappe.cache.delete_value([cls.notes_key(session_id), cls.notes_now_key(session_id)])
+
+	@staticmethod
+	def notes_now_key(session_id: str) -> str:
+		return f"builder_ai_notes_now:{session_id}"
+
+	@classmethod
+	def send_notes_now(cls, session_id: str) -> None:
+		"""Ask the running turn to drop the step it is on and read its notes straight away."""
+		frappe.cache.set_value(cls.notes_now_key(session_id), 1, expires_in_sec=locks.SESSION_LOCK_TTL)
+
+	@classmethod
+	def notes_wanted_now(cls, session_id: str | None) -> bool:
+		# set from a web worker and read from the job, so skip the per-request local cache
+		return bool(session_id) and bool(
+			frappe.cache.get_value(cls.notes_now_key(session_id), use_local_cache=False)
+		)
 
 	# --- lifecycle --------------------------------------------------------
 

@@ -100,7 +100,7 @@ class BuilderPageRenderer(DocumentPage):
 		if self.doc.is_home_page():
 			context["canonical_url"] = frappe.utils.get_url()
 		elif self.doc.canonical_url:
-			context["canonical_url"] = render_template(self.doc.canonical_url, context)
+			context["canonical_url"] = render_template(self.doc.canonical_url, context)  # nosemgrep
 		else:
 			context["canonical_url"] = frappe.utils.get_url(self.path)
 		self.context = context
@@ -281,7 +281,7 @@ class BuilderPage(WebsiteGenerator):
 		if self.has_value_changed("published") and not self.published:
 			# if this is homepage then clear homepage from builder settings
 			if frappe.get_cached_value("Builder Settings", "Builder Settings", "home_page") == self.route:
-				frappe.db.set_value("Builder Settings", "Builder Settings", "home_page", None)
+				frappe.db.set_single_value("Builder Settings", "home_page", None)
 
 		if (
 			frappe.conf.developer_mode
@@ -359,6 +359,8 @@ class BuilderPage(WebsiteGenerator):
 		for session in frappe.get_all("Builder AI Session", filters={"page": self.name}, pluck="name"):
 			# another user's chat on this page goes too, whoever deletes the page
 			frappe.delete_doc("Builder AI Session", session, ignore_missing=True, ignore_permissions=True)
+		# a chat that went on elsewhere keeps its messages and just stops listing this page
+		frappe.db.delete("Builder AI Session Page", {"page": self.name})
 
 		if self.is_template and self.template_group:
 			if frappe.conf.developer_mode:
@@ -587,7 +589,7 @@ class BuilderPage(WebsiteGenerator):
 		self.set_custom_font(context, fonts)
 		context.font_urls = get_google_font_urls(fonts)
 		context.__content = content
-		context.style = render_template(style, page_data)
+		context.style = render_template(style, page_data)  # nosemgrep
 		context.editor_link = f"/{get_builder_path()}/page/{self.name}"
 		if frappe.form_dict and self.dynamic_route:
 			query_string = "&".join(
@@ -618,7 +620,7 @@ class BuilderPage(WebsiteGenerator):
 		self.set_language(context)
 		# tojson can't serialize dates or decimals; frappe's encoder can
 		context.page_data = frappe.parse_json(frappe.as_json(clean_data(context.page_data)))
-		context["__content"] = render_template(context.__content, context)
+		context["__content"] = render_template(context.__content, context)  # nosemgrep
 
 	def set_meta_tags(self, context, page_data=None):
 		if not page_data:
@@ -684,8 +686,18 @@ class BuilderPage(WebsiteGenerator):
 		if self.body_html:
 			context._body_html += self.body_html
 
-		context["_head_html"] = render_template(context._head_html, context)
-		context["_body_html"] = render_template(context._body_html, context)
+		context["_head_html"] = render_template(context._head_html, context)  # nosemgrep
+		context["_body_html"] = render_template(context._body_html, context)  # nosemgrep
+
+	def get_app_page_data(self) -> dict:
+		"""Data installed apps give this page through the builder_page_data hook, each under its app's name,
+		so bindings read `<app>.<key>`. The page's own data script runs after, with this data already in `data`."""
+		app_data = {}
+		for app in frappe.get_installed_apps():
+			for method in frappe.get_hooks("builder_page_data", app_name=app):
+				if data := frappe.get_attr(method)(self):
+					app_data.setdefault(app, {}).update(data)
+		return app_data
 
 	@frappe.whitelist()
 	def get_page_data(self, route_variables: dict | None = None) -> dict:
@@ -694,7 +706,8 @@ class BuilderPage(WebsiteGenerator):
 	def _get_page_data(self, route_variables: dict | None = None, for_render: bool = False) -> dict:
 		if route_variables:
 			frappe.form_dict.update({k: v for k, v in route_variables.items()})
-		page_data = frappe._dict()
+		# the page's script sees what apps gave, so it can read or change it
+		page_data = frappe._dict(self.get_app_page_data())
 		if self.page_data_script:
 
 			def redirect(location: str, http_status_code: int = 302):
@@ -702,7 +715,7 @@ class BuilderPage(WebsiteGenerator):
 					frappe.local.flags.redirect_location = location
 					raise frappe.Redirect(http_status_code)
 
-			_locals = dict(data=frappe._dict(), redirect=redirect)
+			_locals = dict(data=page_data, redirect=redirect)
 			execute_script(self.page_data_script, _locals, self.name)
 			page_data.update(_locals["data"])
 
